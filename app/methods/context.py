@@ -64,9 +64,12 @@ class Tracker:
                      [s.prm for s in self.samples] if self.weighted else None,
                      [s.correct for s in self.samples])
 
-    async def add(self, s: SampleRecord) -> None:
+    async def add(self, s: SampleRecord, count_tokens: bool = True) -> None:
+        """count_tokens=False when the caller accounts generation cost itself (beam search,
+        where a completed beam's tokens are shared with its ancestors)."""
         self.samples.append(s)
-        self.tokens += s.tokens
+        if count_tokens:
+            self.tokens += s.tokens
         emit = self.ctx.emit
         await emit({"type": "sample_done", "sample": s.idx, "answer": s.answer, "correct": s.correct,
                     "prm": s.prm, "tokens": s.tokens})
