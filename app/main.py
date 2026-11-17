@@ -71,6 +71,15 @@ app = FastAPI(title="Test-Time Scaling Visualizer", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=WEB_DIR, check_dir=False), name="static")
 
 
+@app.middleware("http")
+async def revalidate_ui(request, call_next):
+    """Make browsers revalidate the UI files so an update is never hidden behind a stale cache."""
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 @app.get("/", include_in_schema=False)
 async def index():
     return FileResponse(WEB_DIR / "index.html")
