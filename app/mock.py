@@ -43,7 +43,8 @@ class MockBackend:
         for q in self.questions:
             if q.problem in text:
                 return q
-        raise ValueError("mock backend: unknown problem")
+        # Custom questions typed into the UI: pretend they are medium difficulty with answer 42.
+        return Question("custom", "", "42", 3, "custom")
 
     def _answer(self, q: Question, rng: random.Random) -> str:
         if rng.random() < P_CORRECT.get(q.level, 0.5):
@@ -87,10 +88,7 @@ class MockBackend:
             await asyncio.sleep(self.delay)
 
     async def score(self, problem: str, solutions: list[list[str]]) -> list[list[float]]:
-        try:
-            gold = answer_key(self._question(problem).answer)
-        except ValueError:
-            gold = None
+        gold = answer_key(self._question(problem).answer)
         out = []
         for steps in solutions:
             scores = []

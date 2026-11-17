@@ -7,8 +7,12 @@ timeout by running checks in a process pool instead.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from concurrent.futures import ProcessPoolExecutor
+
+# Timeouts are deliberately disabled (see module docstring); silence the per-call notice.
+logging.getLogger("math_verify").setLevel(logging.ERROR)
 
 _BOX_RE = re.compile(r"\\(?:boxed|fbox)\s*\{")
 

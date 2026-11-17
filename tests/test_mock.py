@@ -67,3 +67,12 @@ async def test_score_prefers_correct_final_step():
     bad = ["So the answer is \\boxed{12345}."]
     sg, sb = await mb.score(q.problem, [good, bad])
     assert sg[-1] > sb[-1]
+
+
+async def test_unknown_problem_is_level3_with_gold_42():
+    mb = MockBackend(QS)
+    ev = await collect(mb.generate(solve_prompt("A brand new custom problem?"), 8, Sampling()))
+    answers = [extract_boxed(d.text) for d in dones(ev)]
+    assert len(answers) == 8 and "42" in answers
+    s = await mb.score("A brand new custom problem?", [[r"So \boxed{42}."], [r"So \boxed{0}."]])
+    assert s[0][-1] > s[1][-1]
