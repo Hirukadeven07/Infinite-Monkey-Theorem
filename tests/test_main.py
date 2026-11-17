@@ -105,3 +105,9 @@ def test_bench_metrics_and_export(client):
     assert js["config"]["pool_size"] == 4 and js["rows"]
     assert client.post("/api/bench", json={"beam_budgets": [6]}).status_code == 422
     assert client.post("/api/bench/999/resume").status_code == 404
+
+
+def test_ui_assets_are_revalidated(client):
+    for path in ("/", "/static/app.js", "/static/styles.css"):
+        r = client.get(path)
+        assert r.status_code == 200 and r.headers["cache-control"] == "no-cache"
