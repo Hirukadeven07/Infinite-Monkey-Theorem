@@ -95,19 +95,25 @@ def level_table(rows: list[ResultRow], levels: dict[str, int]) -> list[dict]:
 
 
 def fold_assignment(levels: dict[str, int], seed: int = 0) -> dict[str, int]:
-    """Two folds, stratified by level."""
+    """Two folds, stratified by level. The alternation continues across levels so the folds
+    stay balanced even with one question per level."""
     rng = random.Random(seed)
     folds: dict[str, int] = {}
+    i = 0
     for lv in sorted(set(levels.values())):
         qids = sorted(q for q, l in levels.items() if l == lv)
         rng.shuffle(qids)
-        for i, q in enumerate(qids):
+        for q in qids:
             folds[q] = i % 2
+            i += 1
     return folds
 
 
 def compute_optimal(rows: list[ResultRow], levels: dict[str, int], seed: int = 0) -> dict[int, float]:
-    """Pick the best method per (level, budget) on one fold, score it on the other, both ways."""
+    """Pick the best method per (level, budget) on one fold, score it on the other, both ways.
+    Folds are drawn over the questions that have results, not the whole dataset."""
+    present = {r.question_id for r in rows}
+    levels = {q: lv for q, lv in levels.items() if q in present}
     folds = fold_assignment(levels, seed)
     table: dict[int, dict[str, dict[str, float]]] = defaultdict(lambda: defaultdict(dict))
     for r in rows:

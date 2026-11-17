@@ -70,3 +70,20 @@ def test_level_table():
     t = level_table(rows, levels)
     assert {"level": 1, "method": "bon", "budget": 4, "accuracy": 0.5, "n": 2} in t
     assert {"level": 2, "method": "bon", "budget": 4, "accuracy": 1.0, "n": 1} in t
+
+
+def test_folds_balanced_with_one_question_per_level():
+    levels = {f"q{i}": i + 1 for i in range(5)}
+    folds = fold_assignment(levels, seed=0)
+    assert sorted(folds.values()).count(0) in (2, 3) and set(folds.values()) == {0, 1}
+    rows = [ResultRow(q, "bon", 4, 1.0, 0, 0) for q in levels]
+    assert compute_optimal(rows, levels)[4] == 1.0
+
+
+def test_compute_optimal_ignores_questions_without_rows():
+    levels = {f"q{i}": i % 5 + 1 for i in range(20)}  # full dataset
+    folds = fold_assignment(levels, seed=0)
+    # benchmark only fold-0 questions: dataset-wide folds would leave nothing to train on
+    bench = [q for q in levels if folds[q] == 0]
+    rows = [ResultRow(q, "bon", 4, 1.0, 0, 0) for q in bench]
+    assert compute_optimal(rows, levels)[4] == 1.0
