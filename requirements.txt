@@ -1,0 +1,7 @@
+fastapi
+uvicorn[standard]
+httpx
+websockets
+math-verify[antlr4_13_2]==0.9.0
+pytest
+pytest-asyncio
