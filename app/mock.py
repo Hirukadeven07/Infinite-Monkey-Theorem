@@ -46,12 +46,15 @@ class MockBackend:
         # Custom questions typed into the UI: pretend they are medium difficulty with answer 42.
         return Question("custom", "", "42", 3, "custom")
 
+    def wrong_answers(self, q: Question) -> list[str]:
+        """Three plausible-looking wrong answers that are never equivalent to the gold one."""
+        gold = answer_key(q.answer)
+        return [w for w in ("-1", "0", "7", "12") if answer_key(w) != gold][:3]
+
     def _answer(self, q: Question, rng: random.Random) -> str:
         if rng.random() < P_CORRECT.get(q.level, 0.5):
             return q.answer
-        gold = answer_key(q.answer)
-        wrong = [w for w in (f"{q.answer}1", "0", "-1", "2") if answer_key(w) != gold]
-        return rng.choice(wrong[:3])
+        return rng.choice(self.wrong_answers(q))
 
     def _step_text(self, q: Question, k: int, rng_parts: tuple) -> str:
         if k < self.steps:

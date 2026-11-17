@@ -76,3 +76,11 @@ async def test_unknown_problem_is_level3_with_gold_42():
     assert len(answers) == 8 and "42" in answers
     s = await mb.score("A brand new custom problem?", [[r"So \boxed{42}."], [r"So \boxed{0}."]])
     assert s[0][-1] > s[1][-1]
+
+
+def test_mock_wrong_answers_are_never_graded_correct():
+    from app.grading import is_correct
+    mb = MockBackend(QS)
+    for q in QS:
+        for w in mb.wrong_answers(q):
+            assert not is_correct(w, q.answer), (q.answer, w)
