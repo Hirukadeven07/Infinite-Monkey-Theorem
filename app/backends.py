@@ -15,10 +15,10 @@ class Backend(Protocol):
     kind: str   # "colab" | "mock"
     info: dict  # policy_model, prm_model, prm_precision, gpu, vllm_version, mock
 
-    def generate(self, prompt: str, n: int, sampling: Sampling,
-                 stop: list[str] | None = None) -> AsyncIterator[Delta | Done]:
-        """Interleaved Deltas and exactly one Done per index 0..n-1.
-        Closing the iterator early cancels the job."""
+    def generate(self, prompt: str, n: int, sampling: Sampling, stop: list[str] | None = None,
+                 deltas: bool = True) -> AsyncIterator[Delta | Done]:
+        """Interleaved Deltas and exactly one Done per index 0..n-1 (only Dones when
+        deltas=False). Closing the iterator early cancels the job."""
         ...
 
     async def score(self, problem: str, solutions: list[list[str]]) -> list[list[float]]:
@@ -131,12 +131,12 @@ class ColabBackend:
             raise JobError(msg.get("message", "gateway error"))
         return msg
 
-    async def generate(self, prompt: str, n: int, sampling: Sampling,
-                       stop: list[str] | None = None) -> AsyncIterator[Delta | Done]:
+    async def generate(self, prompt: str, n: int, sampling: Sampling, stop: list[str] | None = None,
+                       deltas: bool = True) -> AsyncIterator[Delta | Done]:
         job, q = self._open()
         ended = False
         try:
-            await self._send({"op": "generate", "job": job, "prompt": prompt, "n": n, "stop": stop,
+            await self._send({"op": "generate", "job": job, "prompt": prompt, "n": n, "stop": stop, "deltas": deltas,
                               "max_tokens": sampling.max_tokens, "temperature": sampling.temperature,
                               "top_p": sampling.top_p, "top_k": sampling.top_k})
             while True:

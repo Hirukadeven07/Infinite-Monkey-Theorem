@@ -124,3 +124,57 @@ async def test_vllm_http_error_includes_body():
     with pytest.raises(RuntimeError, match="maximum context length"):
         async for _ in pol.stream("p", 1, None, 10, 0.7, 0.8, 20):
             pass
+
+
+def test_generate_without_deltas_sends_only_dones():
+    client, _ = make()
+    with client.websocket_connect("/ws") as ws:
+        auth(ws)
+        ws.send_json({"op": "generate", "job": "q", "prompt": "p", "n": 2, "stop": None, "max_tokens": 10,
+                      "temperature": 0.7, "top_p": 0.8, "top_k": 20, "deltas": False})
+        msgs = until_end(ws, "q")
+        assert [m["type"] for m in msgs] == ["done", "done", "end"]
+        assert msgs[0]["text"] == "w0 w1 "
+
+
+class FakeTok:
+    """Whitespace tokenizer: <extra_0> -> 7, pad -> 0, other words -> 3..7 by length."""
+    padding_side = "right"
+
+    def apply_chat_template(self, msgs, tokenize=False, add_generation_prompt=False):
+        return " ".join(m["content"] for m in msgs)
+
+    def encode(self, text, return_tensors=None):
+        return [7]
+
+    def __call__(self, texts, return_tensors="pt", padding=True):
+        import torch
+        rows = [[7 if w == "<extra_0>" else 3 + len(w) % 4 for w in t.replace("<extra_0>", " <extra_0> ").split()]
+                for t in texts]
+        width = max(len(r) for r in rows)
+        ids = torch.tensor([r + [0] * (width - len(r)) for r in rows])
+        mask = torch.tensor([[1] * len(r) + [0] * (width - len(r)) for r in rows])
+        from types import SimpleNamespace
+        return SimpleNamespace(input_ids=ids, attention_mask=mask)
+
+
+class FakePrmModel:
+    device = "cpu"
+
+    def __call__(self, input_ids, attention_mask=None):
+        import torch
+        t = torch.arange(input_ids.shape[1]).expand_as(input_ids).float()
+        pos = 0.05 * t + 0.02 * input_ids.float()          # depends only on token + position
+        return (torch.stack([torch.zeros_like(pos), pos], dim=-1),)
+
+
+def test_qwen_prm_batches_without_changing_scores():
+    pytest.importorskip("torch")
+    from colab.gateway import QwenPrm
+    prm = QwenPrm.from_parts(FakeTok(), FakePrmModel(), batch_size=2)
+    sols = [["a b c", "dd"], ["e"], ["fff g", "h", "iiii jj kk"]]
+    batched = prm.score("problem text", sols)
+    singles = [prm.score("problem text", [s])[0] for s in sols]
+    assert [len(x) for x in batched] == [2, 1, 3]
+    assert batched == singles
+    assert all(0 <= v <= 1 for row in batched for v in row)

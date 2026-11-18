@@ -152,7 +152,7 @@ class BenchRunner:
         done = self.store.done_items(run_id)
         todo = [it for it in bench_items(cfg, self.questions) if (it[0].id, it[1], it[2]) not in done]
         sem = asyncio.Semaphore(cfg.concurrency)
-        ctx = RunContext(backend=backend, grader=self.grader, sampling=self.sampling)
+        ctx = RunContext(backend=backend, grader=self.grader, sampling=self.sampling, stream=False)
 
         async def one(q: Question, item: str, budget: int) -> None:
             async with sem:
