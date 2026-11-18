@@ -28,7 +28,7 @@ async def run_revisions(ctx: RunContext, q: Question, n: int) -> MethodResult:
         prompt = solve_prompt(q.problem) if i == 0 else revision_prompt(q.problem, texts)
         t0 = time.monotonic()
         done: Done | None = None
-        async with aclosing(ctx.backend.generate(prompt, 1, ctx.sampling)) as stream:
+        async with aclosing(ctx.backend.generate(prompt, 1, ctx.sampling, deltas=ctx.stream)) as stream:
             async for ev in stream:
                 if isinstance(ev, Delta):
                     await ctx.emit({"type": "sample_delta", "sample": i, "text": ev.text})

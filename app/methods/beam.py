@@ -35,7 +35,7 @@ class Node:
 
 async def _expand(ctx: RunContext, prompt: str, n: int) -> list[Done]:
     out: list[Done] = []
-    async with aclosing(ctx.backend.generate(prompt, n, ctx.sampling, stop=STOP)) as stream:
+    async with aclosing(ctx.backend.generate(prompt, n, ctx.sampling, stop=STOP, deltas=False)) as stream:
         async for ev in stream:
             if isinstance(ev, Done):
                 out.append(ev)
@@ -53,7 +53,7 @@ async def _baseline(ctx: RunContext, q: Question, prefix: str) -> SampleRecord:
 
 async def _expand_plain(ctx: RunContext, prompt: str) -> list[Done]:
     out: list[Done] = []
-    async with aclosing(ctx.backend.generate(prompt, 1, ctx.sampling)) as stream:
+    async with aclosing(ctx.backend.generate(prompt, 1, ctx.sampling, deltas=False)) as stream:
         async for ev in stream:
             if isinstance(ev, Done):
                 out.append(ev)

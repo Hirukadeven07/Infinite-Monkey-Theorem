@@ -1,0 +1,3 @@
+-r requirements.txt
+# optional: lets tests/test_gateway.py check batched PRM scoring locally (CPU build is enough)
+torch

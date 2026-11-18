@@ -6,7 +6,8 @@ this WebSocket instead.
 
 Protocol (JSON messages over /ws):
   client -> {"op": "auth", "token"}                          (first message; bad token closes 4401)
-  client -> {"op": "generate", "job", "prompt", "n", "stop", "max_tokens", "temperature", "top_p", "top_k"}
+  client -> {"op": "generate", "job", "prompt", "n", "stop", "max_tokens", "temperature", "top_p", "top_k",
+              "deltas"}                                      (deltas=false: only "done" messages)
   client -> {"op": "score", "job", "problem", "solutions": [[step, ...], ...]}
   client -> {"op": "cancel", "job"}
   server -> {"type": "ready", "info"}
@@ -78,8 +79,11 @@ def create_app(policy: PolicyClient, prm: PrmScorer, token: str, info: dict) -> 
                 stream = policy.stream(msg["prompt"], int(msg.get("n", 1)), msg.get("stop"),
                                        int(msg.get("max_tokens", 2048)), float(msg.get("temperature", 0.7)),
                                        float(msg.get("top_p", 0.8)), int(msg.get("top_k", 20)))
+                want_deltas = msg.get("deltas", True) is not False
                 async with aclosing(stream) as it:
                     async for ev in it:
+                        if ev.get("type") == "delta" and not want_deltas:
+                            continue  # the tunnel only carries what the client will show
                         await send({"job": job, **ev})
                 await send({"job": job, "type": "end"})
             except asyncio.CancelledError:
@@ -180,12 +184,14 @@ class QwenPrm:
 
     SYSTEM = "Please reason step by step, and put your final answer within \\boxed{}."
 
-    def __init__(self, model_name: str, quant: str = "bf16"):
+    def __init__(self, model_name: str, quant: str = "bf16", batch_size: int = 8):
         import torch
         from transformers import AutoModel, AutoTokenizer
 
         self.torch = torch
+        self.batch_size = batch_size
         self.tok = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+        self.tok.padding_side = "right"
         kwargs = {"trust_remote_code": True, "device_map": "auto"}
         if quant == "4bit":
             from transformers import BitsAndBytesConfig
@@ -196,18 +202,36 @@ class QwenPrm:
         self.model = AutoModel.from_pretrained(model_name, **kwargs).eval()
         self.sep_id = self.tok.encode("<extra_0>")[0]
 
+    @classmethod
+    def from_parts(cls, tok, model, batch_size: int = 8) -> "QwenPrm":
+        """Build around an existing tokenizer/model (used by tests)."""
+        import torch
+
+        self = cls.__new__(cls)
+        self.torch, self.tok, self.model, self.batch_size = torch, tok, model, batch_size
+        self.sep_id = tok.encode("<extra_0>")[0]
+        return self
+
+    def _text(self, problem: str, steps: list[str]) -> str:
+        msgs = [{"role": "system", "content": self.SYSTEM},
+                {"role": "user", "content": problem},
+                {"role": "assistant", "content": "<extra_0>".join(steps) + "<extra_0>"}]
+        return self.tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=False)
+
     def score(self, problem: str, solutions: list[list[str]]) -> list[list[float]]:
+        """Score solutions in right-padded batches; each step's score is P(correct) at its
+        <extra_0> marker (causal attention means padding on the right changes nothing)."""
         torch = self.torch
-        out = []
-        for steps in solutions:
-            msgs = [{"role": "system", "content": self.SYSTEM},
-                    {"role": "user", "content": problem},
-                    {"role": "assistant", "content": "<extra_0>".join(steps) + "<extra_0>"}]
-            text = self.tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=False)
-            ids = self.tok.encode(text, return_tensors="pt").to(self.model.device)
+        out: list[list[float]] = []
+        for start in range(0, len(solutions), self.batch_size):
+            chunk = solutions[start:start + self.batch_size]
+            enc = self.tok([self._text(problem, s) for s in chunk], return_tensors="pt", padding=True)
+            ids = enc.input_ids.to(self.model.device)
+            attn = enc.attention_mask.to(self.model.device)
             with torch.no_grad():
-                logits = self.model(input_ids=ids)[0]
-            mask = ids == self.sep_id
-            probs = torch.softmax(logits.float(), dim=-1)[0][mask[0]][:, 1]
-            out.append([round(float(p), 6) for p in probs.cpu()])
+                logits = self.model(input_ids=ids, attention_mask=attn)[0]
+            probs = torch.softmax(logits.float(), dim=-1)[..., 1]
+            mask = (ids == self.sep_id) & attn.bool()
+            for row in range(len(chunk)):
+                out.append([round(float(p), 6) for p in probs[row][mask[row]].cpu()])
         return out

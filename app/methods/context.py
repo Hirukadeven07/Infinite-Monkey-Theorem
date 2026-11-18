@@ -2,6 +2,7 @@
 and live tally/curve tracking. Every method streams events through ctx.emit."""
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable
@@ -23,6 +24,7 @@ class RunContext:
     grader: Grader
     sampling: Sampling = field(default_factory=Sampling)
     emit: Callable[[dict], Awaitable[None]] = _noop
+    stream: bool = True  # False (bench): no token deltas, PRM scoring batched per pool
 
 
 async def finish_sample(ctx: RunContext, q: Question, idx: int, text: str,
@@ -33,6 +35,19 @@ async def finish_sample(ctx: RunContext, q: Question, idx: int, text: str,
     steps = split_steps(text)
     prm_steps = (await ctx.backend.score(q.problem, [steps]))[0] if steps else None
     return SampleRecord(idx, text, answer, correct, prm_steps, tokens, round(seconds, 3))
+
+
+async def finish_samples(ctx: RunContext, q: Question, dones: list, t0: float) -> list[SampleRecord]:
+    """Batch version of finish_sample: one PRM call for the whole pool, grading in parallel."""
+    now = time.monotonic()
+    steps = [split_steps(d.text) for d in dones]
+    scorable = [s for s in steps if s]
+    scored = iter(await ctx.backend.score(q.problem, scorable)) if scorable else iter(())
+    prm = [next(scored) if s else None for s in steps]
+    answers = [extract_boxed(d.text) for d in dones]
+    correct = await asyncio.gather(*(ctx.grader.grade(a, q.answer) for a in answers))
+    return [SampleRecord(d.index, d.text, a, c, p, d.tokens, round(now - t0, 3))
+            for d, a, c, p in zip(dones, answers, correct, prm)]
 
 
 def answer_correct(answer: str | None, samples: list[SampleRecord]) -> bool:

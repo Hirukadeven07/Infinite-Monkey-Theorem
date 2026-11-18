@@ -85,6 +85,14 @@ async def test_gateway_job_error_raises_job_error(gateway):
     await be.close()
 
 
+async def test_generate_without_deltas(gateway):
+    be = ColabBackend(gateway.url, TOKEN)
+    await be.connect()
+    evs = [e async for e in be.generate("p", 2, Sampling(), deltas=False)]
+    assert len(evs) == 2 and all(isinstance(e, Done) for e in evs)
+    await be.close()
+
+
 async def test_bad_token(gateway):
     be = ColabBackend(gateway.url, "wrong")
     with pytest.raises(BackendError, match="token"):

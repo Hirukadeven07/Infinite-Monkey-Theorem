@@ -21,11 +21,11 @@ class FlakyBackend(MockBackend):
         self.calls = 0
         self.fail_after = fail_after
 
-    async def generate(self, prompt, n, sampling, stop=None):
+    async def generate(self, prompt, n, sampling, stop=None, deltas=True):
         self.calls += 1
         if self.calls > self.fail_after:
             raise BackendError("tunnel dropped")
-        async for ev in super().generate(prompt, n, sampling, stop):
+        async for ev in super().generate(prompt, n, sampling, stop, deltas=deltas):
             yield ev
 
 
@@ -127,11 +127,11 @@ class JobFailBackend(MockBackend):
         super().__init__(QS)
         self.bad = bad_problem
 
-    async def generate(self, prompt, n, sampling, stop=None):
+    async def generate(self, prompt, n, sampling, stop=None, deltas=True):
         from app.schema import JobError
         if self.bad in prompt:
             raise JobError("context length exceeded")
-        async for ev in super().generate(prompt, n, sampling, stop):
+        async for ev in super().generate(prompt, n, sampling, stop, deltas=deltas):
             yield ev
 
 

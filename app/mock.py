@@ -73,8 +73,8 @@ class MockBackend:
         return "\n\n".join(texts), True
 
     # -- Backend -------------------------------------------------------------
-    async def generate(self, prompt: str, n: int, sampling: Sampling,
-                       stop: list[str] | None = None) -> AsyncIterator[Delta | Done]:
+    async def generate(self, prompt: str, n: int, sampling: Sampling, stop: list[str] | None = None,
+                       deltas: bool = True) -> AsyncIterator[Delta | Done]:
         outs = [self._completion(prompt, i, stop) for i in range(n)]
         words = [_WORD_RE.findall(text) for text, _ in outs]
         pos = [0] * n
@@ -82,7 +82,8 @@ class MockBackend:
         while pending:
             for i in sorted(pending):
                 if pos[i] < len(words[i]):
-                    yield Delta(i, words[i][pos[i]])
+                    if deltas:
+                        yield Delta(i, words[i][pos[i]])
                     pos[i] += 1
                 if pos[i] >= len(words[i]):
                     pending.discard(i)
