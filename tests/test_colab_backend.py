@@ -134,3 +134,42 @@ async def test_early_close_sends_cancel(gateway):  # Review Focus 3
         await asyncio.sleep(0.02)
     assert gateway.policy.cancelled
     await be.close()
+
+
+async def _wait_disconnected(be, limit=5.0):
+    deadline = time.time() + limit
+    while be.connected and time.time() < deadline:
+        await asyncio.sleep(0.02)
+    assert not be.connected
+
+
+async def test_reconnects_after_socket_drop(gateway):
+    # The tunnel socket can drop (laptop sleep, network blip) while Colab keeps serving:
+    # the next job must reconnect with the saved URL and token instead of failing.
+    be = ColabBackend(gateway.url, TOKEN)
+    await be.connect()
+    await be._ws.close()
+    await _wait_disconnected(be)
+    assert await be.score("p", [["a"]]) == [[0.5]]
+    assert be.connected
+    evs = [e async for e in be.generate("p", 1, Sampling())]
+    assert any(isinstance(e, Done) for e in evs)
+    await be.close()
+
+
+async def test_ensure_connected_restores_the_socket(gateway):
+    be = ColabBackend(gateway.url, TOKEN)
+    await be.connect()
+    await be._ws.close()
+    await _wait_disconnected(be)
+    assert await be.ensure_connected() is True and be.connected
+    await be.close()
+
+
+async def test_closed_backend_never_reconnects(gateway):
+    be = ColabBackend(gateway.url, TOKEN)
+    await be.connect()
+    await be.close()
+    with pytest.raises(BackendError):
+        await be.score("p", [["a"]])
+    assert await be.ensure_connected() is False and not be.connected

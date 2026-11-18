@@ -124,3 +124,49 @@ def test_live_unexpected_error_is_reported(client, monkeypatch):
         ws.send_json({"op": "run", "question_id": QID, "method": "bon", "budget": 4})
         types, last = collect_until(ws, "run_end")
         assert last["type"] == "error" and "unexpected failure" in last["message"]
+
+
+class DroppedBackend:
+    """A Colab backend whose socket dropped but whose gateway is still up."""
+    kind = "colab"
+    info = {"mock": False}
+
+    def __init__(self):
+        self.connected = False
+
+    async def ensure_connected(self):
+        self.connected = True
+        return True
+
+    async def close(self):
+        pass
+
+
+def test_backend_status_reconnects_a_dropped_socket(client):
+    from app.main import state
+    state.backend = DroppedBackend()
+    assert client.get("/api/backend").json()["connected"] is True
+
+
+def test_bench_start_reconnects_instead_of_409(client):
+    from app import main
+    be = DroppedBackend()
+    main.state.backend = be
+    import asyncio
+    asyncio.run(main._require_connected())
+    assert be.connected
+
+
+def test_backend_status_does_not_hang_on_a_dead_tunnel(client):
+    import asyncio
+    from app.main import state
+
+    class Hanging(DroppedBackend):
+        async def ensure_connected(self):
+            await asyncio.sleep(30)
+            return False
+
+    state.backend = Hanging()
+    t = time.time()
+    assert client.get("/api/backend").json()["connected"] is False
+    assert time.time() - t < 10
