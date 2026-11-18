@@ -116,7 +116,7 @@ def test_restart_requested_only_if_a_loaded_package_changed(monkeypatch):
 GUARDED = {
     "get_device_properties": "POLICY_MODEL",   # GPU check needs the config cell
     '"vllm", "serve"': "DTYPE",                 # vLLM needs the GPU check
-    "QwenPrm(PRM_MODEL": "vllm_proc",           # gateway needs vLLM running
+    "QwenPrm(PRM_MODEL": "VLLM_READY",          # gateway needs vLLM running
     "--no-autoupdate": "TOKEN",                 # tunnel needs the gateway
 }
 
@@ -136,3 +136,17 @@ def test_guards_work_in_a_fresh_session():
         guard = guard[:guard.index("import ")] if "import " in guard else guard
         with pytest.raises(RuntimeError, match="Run all"):
             exec(guard, {})
+
+
+def test_gateway_cell_reloads_edited_gateway_module():
+    # Re-running after gateway.py is rewritten must not keep the stale imported module.
+    cell = _cell_with("QwenPrm(PRM_MODEL")
+    assert "importlib.reload(gateway)" in cell
+    assert cell.index("importlib.reload(gateway)") < cell.index("from gateway import")
+
+
+def test_vllm_cell_reuses_a_server_already_on_the_port():
+    # After a kernel restart the old vLLM process can still hold the port and GPU memory.
+    cell = _cell_with('"vllm", "serve"')
+    assert cell.index("/health") < cell.index("subprocess.Popen")
+    assert "VLLM_READY = True" in cell

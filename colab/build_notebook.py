@@ -96,40 +96,52 @@ VLLM = """if "DTYPE" not in globals():
     raise RuntimeError("GPU settings are missing: run section 1 (GPU check) first. If the session restarted, use Runtime -> Run all.")
 import subprocess, sys, time, httpx
 
-if "vllm_proc" in globals() and vllm_proc.poll() is None:
-    print("vLLM is already running - not starting a second copy.")
+
+def vllm_healthy():
+    try:
+        return httpx.get(f"http://127.0.0.1:{VLLM_PORT}/health", timeout=2).status_code == 200
+    except httpx.HTTPError:
+        return False
+
+
+if vllm_healthy():
+    # Started earlier in this session, or left running by a previous kernel (a restart doesn't stop it).
+    served = httpx.get(f"http://127.0.0.1:{VLLM_PORT}/v1/models", timeout=5).json()["data"][0]["id"]
+    if served != POLICY_MODEL:
+        raise RuntimeError(f"Port {VLLM_PORT} is already serving {served}, not {POLICY_MODEL}. "
+                           "Restart the runtime (Runtime -> Disconnect and delete runtime) and Run all.")
+    print(f"vLLM is already serving {served} on port {VLLM_PORT} - reusing it.")
 else:
     vllm_log = open("vllm.log", "w")
     vllm_proc = subprocess.Popen(
         ["vllm", "serve", POLICY_MODEL, "--port", str(VLLM_PORT), "--dtype", DTYPE,
          "--gpu-memory-utilization", str(GPU_UTIL), "--max-model-len", str(MAX_MODEL_LEN)],
         stdout=vllm_log, stderr=subprocess.STDOUT)
-
-deadline = time.time() + 900
-while time.time() < deadline:
-    if vllm_proc.poll() is not None:
-        print(open("vllm.log").read()[-4000:])
-        raise RuntimeError("vLLM exited during startup (log above)")
-    try:
-        if httpx.get(f"http://127.0.0.1:{VLLM_PORT}/health", timeout=2).status_code == 200:
-            break
-    except httpx.HTTPError:
-        pass
-    time.sleep(5)
-else:
-    print(open("vllm.log").read()[-4000:])
-    raise RuntimeError("vLLM did not become healthy within 15 minutes")
-print("vLLM is serving", POLICY_MODEL)
+    deadline = time.time() + 900
+    while not vllm_healthy():
+        if vllm_proc.poll() is not None:
+            print(open("vllm.log").read()[-4000:])
+            raise RuntimeError("vLLM exited during startup (log above)")
+        if time.time() > deadline:
+            print(open("vllm.log").read()[-4000:])
+            raise RuntimeError("vLLM did not become healthy within 15 minutes")
+        time.sleep(5)
+    print("vLLM is serving", POLICY_MODEL)
+VLLM_READY = True
 """
 
-GATEWAY = """if "vllm_proc" not in globals():
+GATEWAY = """if "VLLM_READY" not in globals():
     raise RuntimeError("vLLM is not running: run section 3 (start vLLM) first. If the session restarted, use Runtime -> Run all.")
-if vllm_proc.poll() is not None:
-    raise RuntimeError("vLLM has stopped - check vllm.log, then re-run section 3.")
-import secrets, threading, importlib.metadata
+import importlib, secrets, threading, importlib.metadata
 import uvicorn
 from transformers import AutoTokenizer
+import gateway
+importlib.reload(gateway)  # re-running after gateway.py was rewritten must use the new code
 from gateway import QwenPrm, VllmPolicy, create_app
+
+if "server" in globals() and server.started:  # re-running: stop the previous gateway first
+    server.should_exit = True
+    time.sleep(1.5)
 
 prm = QwenPrm(PRM_MODEL, PRM_QUANT)
 policy = VllmPolicy(f"http://127.0.0.1:{VLLM_PORT}", POLICY_MODEL, tokenizer=AutoTokenizer.from_pretrained(POLICY_MODEL))
@@ -137,7 +149,7 @@ TOKEN = secrets.token_urlsafe(24)
 INFO = {"policy_model": POLICY_MODEL, "policy_dtype": DTYPE, "prm_model": PRM_MODEL, "prm_precision": PRM_QUANT,
         "gpu": GPU_NAME, "vllm_version": importlib.metadata.version("vllm"), "mock": False}
 
-server = uvicorn.Server(uvicorn.Config(create_app(policy, prm, TOKEN, INFO), host="127.0.0.1",
+server = uvicorn.Server(uvicorn.Config(gateway.create_app(policy, prm, TOKEN, INFO), host="127.0.0.1",
                                        port=GATEWAY_PORT, log_level="warning"))
 threading.Thread(target=server.run, daemon=True).start()
 while not server.started:
@@ -188,7 +200,7 @@ KEEPALIVE = """# Optional: keep this cell running to watch health (stop it any t
 while True:
     try:
         r = httpx.get(f"http://127.0.0.1:{GATEWAY_PORT}/health", headers={"Authorization": f"Bearer {TOKEN}"}, timeout=5)
-        print(time.strftime("%H:%M:%S"), "gateway", r.status_code, "| vLLM alive:", vllm_proc.poll() is None)
+        print(time.strftime("%H:%M:%S"), "gateway", r.status_code, "| vLLM healthy:", vllm_healthy())
     except Exception as e:
         print(time.strftime("%H:%M:%S"), "health check failed:", e)
     time.sleep(60)
