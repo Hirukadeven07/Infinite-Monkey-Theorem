@@ -105,15 +105,26 @@ if not os.path.exists("cloudflared"):
         "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64", "cloudflared")
     os.chmod("cloudflared", 0o755)
 
+import queue
+
 tunnel = subprocess.Popen(["./cloudflared", "tunnel", "--no-autoupdate", "--url", f"http://127.0.0.1:{GATEWAY_PORT}"],
                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-PUBLIC_URL = None
-for line in tunnel.stdout:
+tunnel_lines = queue.Queue()
+threading.Thread(target=lambda: [tunnel_lines.put(l) for l in tunnel.stdout], daemon=True).start()  # drains the pipe
+
+PUBLIC_URL, seen, deadline = None, [], time.time() + 90
+while PUBLIC_URL is None and time.time() < deadline and tunnel.poll() is None:
+    try:
+        line = tunnel_lines.get(timeout=1)
+    except queue.Empty:
+        continue
+    seen.append(line.rstrip())
     m = re.search(r"https://[a-z0-9-]+\\.trycloudflare\\.com", line)
     if m:
         PUBLIC_URL = m.group(0)
-        break
-threading.Thread(target=lambda: [None for _ in tunnel.stdout], daemon=True).start()  # keep draining the pipe
+if PUBLIC_URL is None:
+    print("\\n".join(seen[-30:]))
+    raise RuntimeError("cloudflared did not print a tunnel URL within 90 s (its output is above). Re-run this cell.")
 
 from IPython.display import HTML, display
 display(HTML(f'''

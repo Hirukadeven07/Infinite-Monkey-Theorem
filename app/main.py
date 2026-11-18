@@ -12,6 +12,7 @@ import io
 import os
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
+from urllib.parse import urlparse
 from statistics import mean
 from typing import Literal
 
@@ -69,6 +70,23 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Test-Time Scaling Visualizer", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=WEB_DIR, check_dir=False), name="static")
+
+
+def same_origin(origin: str | None, host: str | None) -> bool:
+    """Browsers send Origin on cross-site requests; non-browser clients (curl, tests) don't.
+    A request is allowed when it has no Origin or the Origin is this app itself."""
+    if not origin:
+        return True
+    return urlparse(origin).netloc == (host or "")
+
+
+@app.middleware("http")
+async def refuse_cross_site_writes(request, call_next):
+    """Another website open in the browser must not start runs on the GPU or stop benches."""
+    if request.method not in ("GET", "HEAD", "OPTIONS") and \
+            not same_origin(request.headers.get("origin"), request.headers.get("host")):
+        return JSONResponse(status_code=403, content={"detail": "cross-site request refused"})
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -173,6 +191,9 @@ async def _live_run(msg: dict, emit) -> None:
 
 @app.websocket("/ws/live")
 async def live(ws: WebSocket):
+    if not same_origin(ws.headers.get("origin"), ws.headers.get("host")):
+        await ws.close(code=4403)
+        return
     await ws.accept()
     lock = asyncio.Lock()
     task: asyncio.Task | None = None
