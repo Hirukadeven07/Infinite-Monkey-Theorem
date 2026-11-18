@@ -36,3 +36,44 @@ def test_notebook_is_up_to_date():
     before = NB.read_text(encoding="utf-8")
     subprocess.run([sys.executable, "colab/build_notebook.py", "--check"], check=True)
     assert NB.read_text(encoding="utf-8") == before
+
+
+def _code_cells():
+    return ["".join(c["source"]) for c in load()["cells"] if c["cell_type"] == "code"]
+
+
+def _cell_with(marker):
+    return next(c for c in _code_cells() if marker in c)
+
+
+def test_install_cell_skips_when_installed_and_restarts_after_installing():
+    cell = _cell_with("pip")
+    assert 'importlib.metadata.version("vllm")' in cell     # already installed -> skip
+    assert "os.kill(os.getpid()" in cell                    # fresh install -> restart so new torch loads
+    assert "Run all" in cell                                 # and tell the user what to do next
+    assert not cell.lstrip().startswith("!pip")
+
+
+GUARDED = {
+    "get_device_properties": "POLICY_MODEL",   # GPU check needs the config cell
+    '"vllm", "serve"': "DTYPE",                 # vLLM needs the GPU check
+    "QwenPrm(PRM_MODEL": "vllm_proc",           # gateway needs vLLM running
+    "--no-autoupdate": "TOKEN",                 # tunnel needs the gateway
+}
+
+
+def test_each_stage_checks_its_prerequisites():
+    for marker, needed in GUARDED.items():
+        guard = _cell_with(marker).split(marker)[0]
+        assert needed in guard and "not in globals()" in guard, f"{marker!r} cell must check for {needed} first"
+
+
+def test_guards_work_in_a_fresh_session():
+    # The reported failure: after a restart nothing above has run. Each guard must then raise a
+    # clear RuntimeError (pointing at Run all), not a NameError - including for a helper.
+    import pytest
+    for marker in GUARDED:
+        guard = _cell_with(marker).split(marker)[0]
+        guard = guard[:guard.index("import ")] if "import " in guard else guard
+        with pytest.raises(RuntimeError, match="Run all"):
+            exec(guard, {})
