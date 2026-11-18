@@ -43,6 +43,16 @@ It ships a **test-time scaling visualizer**: a local website where you watch a s
 | Beam search | Step-by-step; the PRM keeps the best N/4 partial solutions, each expanded 4 ways | N generations per step |
 | Sequential revisions | Each attempt sees the last 4 attempts and tries to fix them; PRM-weighted vote over the chain | N attempts |
 
+## Get started
+
+Each session takes three steps (first-time setup is under [Running it](#running-it)):
+
+1. **Start the models.** Open `colab/tts_server.ipynb`, connect to a GPU runtime, and choose **Run all**. It takes a few minutes, mostly downloading the models.
+2. **Start the site.** Run `.venv/Scripts/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000` and open <http://127.0.0.1:8000>.
+3. **Connect them.** Click the backend pill in the site's top-right corner, choose **Colab**, and paste the **URL** and **TOKEN** printed by the notebook's last cell. Both change every session.
+
+When you're done, disconnect the Colab runtime (in Colab: **Runtime → Manage sessions → Terminate**). Closing the notebook doesn't stop it, and it keeps using compute units.
+
 ## Running it
 
 The website runs on your machine; the models run on a Colab GPU and reach the site through a temporary tunnel.
@@ -63,7 +73,7 @@ Open <http://127.0.0.1:8000>. MATH-500 is downloaded to `data/` on first start. 
 2. **Run all.** The first run installs vLLM and downloads the models (5–15 min).
 3. Click the backend pill in the site's top-right corner, choose **Colab**, and paste the **URL** and **TOKEN** the last cell printed.
 
-The URL changes every Colab session. If Colab disconnects mid-benchmark, the run pauses; reconnect and press **Resume** to continue where it stopped. To compare against a bigger model, set `POLICY_MODEL` in the notebook (e.g. `Qwen/Qwen3-8B` on an A100), run a **reference-model run** in Bench, and overlay its pass@1 on your main run's chart.
+The URL changes every Colab session. If the connection drops briefly, the site reconnects on its own. If Colab disconnects mid-benchmark, the run pauses; once Colab is back (with a new URL and token if the session restarted), press **Resume** to continue where it stopped. To compare against a bigger model, set `POLICY_MODEL` in the notebook (e.g. `Qwen/Qwen3-8B` on an A100), run a **reference-model run** in Bench, and overlay its pass@1 on your main run's chart.
 
 ## Differences from the paper
 
