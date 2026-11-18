@@ -4,99 +4,44 @@
 
 <img src="assets/monkey-typewriter.png" alt="A chimpanzee seated at a typewriter" width="420" />
 
-<br/>
-
-![Status](https://img.shields.io/badge/status-in%20development-orange?style=flat-square)
-![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)
-
 </div>
 
-## About
+Watch a small language model (Qwen3) solve math problems many times at once, and see how giving it more compute at test time improves its answers, live in your browser.
 
-This project aims to study the effect of **inference scaling**: how spending more compute at inference time (test-time scaling) changes a model's performance, rather than only scaling model size or training compute.
+<img src="assets/live-view.jpg" alt="Live view: sixteen answers streaming, an answer tally and an accuracy curve" width="900" />
 
-It ships a **test-time scaling visualizer**: a local website where you watch a small model (Qwen3) answer a MATH-500 problem many times at once, see the aggregated answer form in real time, and run control tests that compare each scaling method against a single-sample baseline.
+## What you need
 
-<img src="assets/live-view.jpg" alt="Live view: sixteen samples streaming, an answer tally and the aggregate-correctness curve" width="900" />
+- Python 3.11 or newer
+- A Google Colab account with a GPU (L4 or A100 recommended)
 
-<sub>Live view running best-of-N with N = 16 (shown here on the offline mock backend).</sub>
-
-## What you can do
-
-- **Live**: pick a question (or type your own with an expected answer), a method and a budget N, then watch:
-  - every sample streaming side by side, each with its extracted answer, ✓/✗ and the verifier (PRM) score;
-  - the answer tally re-ranking as samples finish;
-  - a step chart of whether the aggregate is right after k samples;
-  - beam search as a growing tree (pruned branches fade) and sequential revisions as a chain of attempts.
-- **Bench**: run a stratified MATH-500 control test and get:
-  - accuracy vs. generation budget for every method;
-  - the pass@1 baseline;
-  - a compute-optimal line (best method per difficulty level, picked with two-fold cross-validation);
-  - accuracy by difficulty level, cost per question, and CSV/JSON export.
-
-  Runs are resumable and locked to their model/PRM/sampling config.
-
-| Method | What it does | Budget N means |
-|---|---|---|
-| Majority vote | N independent samples; most common answer wins | N samples |
-| Best-of-N weighted | N samples; each answer's PRM scores are summed, highest wins | N samples |
-| Beam search | Step-by-step; the PRM keeps the best N/4 partial solutions, each expanded 4 ways | N generations per step |
-| Sequential revisions | Each attempt sees the last 4 attempts and tries to fix them; PRM-weighted vote over the chain | N attempts |
-
-## Get started
-
-Each session takes three steps (first-time setup is under [Running it](#running-it)):
-
-1. **Start the models.** Open `colab/tts_server.ipynb`, connect to a GPU runtime, and choose **Run all**. It takes a few minutes, mostly downloading the models.
-2. **Start the site.** Run `.venv/Scripts/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000` and open <http://127.0.0.1:8000>.
-3. **Connect them.** Click the backend pill in the site's top-right corner, choose **Colab**, and paste the **URL** and **TOKEN** printed by the notebook's last cell. Both change every session.
-
-When you're done, disconnect the Colab runtime (in Colab: **Runtime → Manage sessions → Terminate**). Closing the notebook doesn't stop it, and it keeps using compute units.
-
-## Running it
-
-The website runs on your machine; the models run on a Colab GPU and reach the site through a temporary tunnel.
-
-**1. Local app (Python 3.11+)**
+## Setup (once)
 
 ```bash
 python -m venv .venv
 .venv/Scripts/pip install -r requirements.txt      # macOS/Linux: .venv/bin/pip
-.venv/Scripts/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Open <http://127.0.0.1:8000>. MATH-500 is downloaded to `data/` on first start. The app starts on the **mock backend**: a fake model that lets you try every view offline. Its results are labelled MOCK everywhere.
+## Get started
 
-**2. Colab GPU**
+1. **Start the models.** Open `colab/tts_server.ipynb` in Colab, choose a GPU runtime, and click **Run all**. The first run takes 5–15 minutes.
+2. **Start the site.** Run the command below, then open <http://127.0.0.1:8000>.
+   ```bash
+   .venv/Scripts/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+   ```
+3. **Connect them.** Click the backend pill in the site's top-right corner, choose **Colab**, and paste the **URL** and **TOKEN** printed by the notebook's last cell. Both change every session.
 
-1. Upload `colab/tts_server.ipynb` to Colab and choose a GPU runtime (A100 or L4 recommended; a T4 works but is slow).
-2. **Run all.** The first run installs vLLM and downloads the models (5–15 min).
-3. Click the backend pill in the site's top-right corner, choose **Colab**, and paste the **URL** and **TOKEN** the last cell printed.
+Until you connect, the site uses a fake model so you can try it offline.
 
-The URL changes every Colab session. If the connection drops briefly, the site reconnects on its own. If Colab disconnects mid-benchmark, the run pauses; once Colab is back (with a new URL and token if the session restarted), press **Resume** to continue where it stopped. To compare against a bigger model, set `POLICY_MODEL` in the notebook (e.g. `Qwen/Qwen3-8B` on an A100), run a **reference-model run** in Bench, and overlay its pass@1 on your main run's chart.
+## Using it
 
-## Differences from the paper
+- **Live:** pick a question, a method and how many answers to generate, press **Run**, and watch the answers stream in.
+- **Bench:** run a set of MATH-500 questions and compare each method's accuracy against a single-answer baseline. If Colab disconnects, press **Resume** to continue.
 
-- **Verifier.** The paper trains its own PRM; this uses the off-the-shelf `Qwen/Qwen2.5-Math-PRM-7B` (loaded in 4-bit on GPUs under 40 GB). A solution's score is its last-step score, as in the paper.
-- **Revisions.** The paper fine-tunes a revision model and selects with a trained verifier; here revisions are *prompted* and the answer is a PRM-weighted vote over the chain.
-- **Difficulty.** Compute-optimal selection uses MATH's own difficulty levels (oracle difficulty) rather than a learned difficulty estimate.
-- **Model.** Qwen3 runs in non-thinking mode with steps separated by blank lines, so the PRM can score each step.
+## When you're done
 
-## Project layout
-
-```
-app/           local FastAPI app: methods, grading, metrics, bench runner, SQLite store
-  methods/     sampling.py (majority, best-of-N), beam.py, revisions.py
-web/           the website (plain HTML + ES modules + Chart.js)
-colab/         gateway.py (served from Colab) and the generated tts_server.ipynb
-tests/         pytest suite; runs entirely on the mock backend, no GPU needed
-docs/          design and implementation plan
-```
-
-Run the tests with `.venv/Scripts/python -m pytest`. After editing `colab/gateway.py`, regenerate the notebook with `python colab/build_notebook.py`.
+Stop the Colab runtime: in Colab, go to **Runtime → Manage sessions → Terminate**. Closing the notebook doesn't stop it, and it keeps using compute units.
 
 ## Reference
 
-This work is inspired by Google DeepMind's research on inference-time compute (test-time scaling):
-
-- Snell, C., Lee, J., Xu, K., & Kumar, A. (2024). *Scaling LLM Test-Time Compute Optimally can be More Effective than Scaling Model Parameters*. [arXiv:2408.03314](https://arxiv.org/abs/2408.03314)
+Based on Snell et al. (2024), *Scaling LLM Test-Time Compute Optimally can be More Effective than Scaling Model Parameters*. [arXiv:2408.03314](https://arxiv.org/abs/2408.03314)
