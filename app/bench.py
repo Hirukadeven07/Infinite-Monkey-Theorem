@@ -191,7 +191,7 @@ class BenchRunner:
             res = await run_sampling(ctx, q, budget, "bon")
             rows = pool_rows(q.id, res.samples, pool_budgets(budget), cfg.repeats, cfg.seed)
         elif item == "beam":
-            res = await run_beam(ctx, q, budget, m=BEAM_WIDTH)
+            res = await run_beam(ctx, q, budget, m=BEAM_WIDTH, baseline=False)
             rows = [ResultRow(q.id, "beam", budget, float(res.correct), res.tokens, res.seconds)]
             detail = {"nodes": res.detail.get("nodes", [])}
         else:

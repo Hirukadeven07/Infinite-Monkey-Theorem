@@ -61,7 +61,8 @@ async def _expand_plain(ctx: RunContext, prompt: str) -> list[Done]:
 
 
 async def run_beam(ctx: RunContext, q: Question, n: int, m: int = 4, max_steps: int = 40,
-                   max_path_tokens: int = 8192) -> MethodResult:
+                   max_path_tokens: int = 8192, baseline: bool = True) -> MethodResult:
+    """baseline=False skips the extra plain sample (bench reads pass@1 from the sampling pool)."""
     if m < 1 or n < m or n % m:
         raise ValueError(f"beam budget must be a multiple of the beam width {m} and at least {m}")
     await emit_run_start(ctx, q, "beam", n)
@@ -72,7 +73,7 @@ async def run_beam(ctx: RunContext, q: Question, n: int, m: int = 4, max_steps: 
     all_nodes: list[Node] = []
     completed: list[Node] = []
     active: list[Node] = [Node("root", None, "")]
-    baseline_task = asyncio.create_task(_baseline(ctx, q, prefix))
+    baseline_task = asyncio.create_task(_baseline(ctx, q, prefix)) if baseline else None
     try:
         for t in range(max_steps):
             if not active:
@@ -122,9 +123,10 @@ async def run_beam(ctx: RunContext, q: Question, n: int, m: int = 4, max_steps: 
                 steps = split_steps(c.text)
                 ps = (await ctx.backend.score(q.problem, [steps]))[0] if steps else None
                 await _record(ctx, q, tracker, c, ps, i, t0)
-        baseline = await baseline_task
+        base = await baseline_task if baseline_task else None
     finally:
-        baseline_task.cancel()
+        if baseline_task:
+            baseline_task.cancel()
 
     samples = sorted(tracker.samples, key=lambda s: s.idx)
     answers = [s.answer for s in samples]
@@ -132,7 +134,7 @@ async def run_beam(ctx: RunContext, q: Question, n: int, m: int = 4, max_steps: 
     result = MethodResult("beam", n, final, answer_correct(final, samples), majority(answers),
                           tracker.tokens, tracker.elapsed(), samples,
                           {"nodes": [asdict(c) for c in all_nodes], "beam_width": m,
-                           "baseline_correct": baseline.correct})
+                           "baseline_correct": base.correct if base else None})
     await emit_run_end(ctx, result)
     return result
 

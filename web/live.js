@@ -172,7 +172,7 @@ function card(i) {
   el.innerHTML = `<div class="s-head"><span>${run.method === "revisions" ? "attempt" : "sample"} #${i + 1}</span><span class="s-tok"></span></div>
     <div class="s-body"></div><div class="s-foot"><span class="muted small">generating…</span></div>`;
   box.appendChild(el);
-  c = { el, body: el.querySelector(".s-body"), foot: el.querySelector(".s-foot"), tok: el.querySelector(".s-tok"), answer: null };
+  c = { el, body: el.querySelector(".s-body"), foot: el.querySelector(".s-foot"), tok: el.querySelector(".s-tok"), key: null };
   run.cards.set(i, c);
   if (run.method === "revisions") el.scrollIntoView({ block: "nearest", inline: "end" });
   return c;
@@ -205,7 +205,7 @@ function onSampleDone(e) {
   if (pending.has(e.sample)) flush();
   const c = card(e.sample);
   c.el.classList.remove("streaming");
-  c.answer = e.answer;
+  c.key = e.key;
   c.tok.textContent = `${e.tokens} tok`;
   const prm = e.prm == null ? "" : `<span class="prm" title="PRM score of the last step">PRM <span class="prm-bar"><i style="width:${Math.round(e.prm * 100)}%"></i></span>${e.prm.toFixed(2)}</span>`;
   c.foot.innerHTML = `${mark(e.correct)}<span class="s-answer" title="${esc(e.answer ?? "(no answer)")}">${esc(e.answer ?? "(no answer)")}</span>${prm}`;
@@ -279,8 +279,8 @@ function onEnd(e) {
   setRunning(false);
   markStreamingDone();
   $("#final").innerHTML = `${mark(e.correct)} ${esc(e.final_answer ?? "(no answer)")}`;
-  if (run && e.final_answer != null) {
-    for (const c of run.cards.values()) c.el.classList.toggle("won", c.answer === e.final_answer);
+  if (run && e.final_key != null) {  // same grouping as the vote (\dfrac{1}{2} == \frac{1}{2})
+    for (const c of run.cards.values()) c.el.classList.toggle("won", c.key === e.final_key);
   }
   renderStats(e);
 }
