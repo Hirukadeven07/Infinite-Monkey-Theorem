@@ -46,12 +46,20 @@ class PrmScorer(Protocol):
 
 
 def create_app(policy: PolicyClient, prm: PrmScorer, token: str, info: dict) -> FastAPI:
-    app = FastAPI(title="tts-gateway")
+    # The tunnel URL is public: no auto-generated docs describing the API to strangers.
+    app = FastAPI(title="tts-gateway", docs_url=None, redoc_url=None, openapi_url=None)
     prm_lock = threading.Lock()
     prm_can_stop = "should_stop" in inspect.signature(prm.score).parameters
 
-    def _check(value: str | None) -> bool:
-        return value is not None and secrets.compare_digest(value.encode(), token.encode())
+    def _check(value) -> bool:
+        return isinstance(value, str) and secrets.compare_digest(value.encode(), token.encode())
+
+    def _parse(raw: str):
+        try:
+            msg = json.loads(raw)
+        except ValueError:
+            return None
+        return msg if isinstance(msg, dict) else None
 
     @app.get("/health")
     async def health(authorization: str | None = Header(default=None)):
@@ -63,11 +71,10 @@ def create_app(policy: PolicyClient, prm: PrmScorer, token: str, info: dict) -> 
     async def ws_endpoint(ws: WebSocket):
         await ws.accept()
         try:
-            first = await asyncio.wait_for(ws.receive_json(), AUTH_TIMEOUT)
+            first = _parse(await asyncio.wait_for(ws.receive_text(), AUTH_TIMEOUT))
         except Exception:
-            await ws.close(code=4401)
-            return
-        if first.get("op") != "auth" or not _check(first.get("token")):
+            first = None
+        if first is None or first.get("op") != "auth" or not _check(first.get("token")):
             await ws.close(code=4401)
             return
         send_lock = asyncio.Lock()
@@ -120,7 +127,10 @@ def create_app(policy: PolicyClient, prm: PrmScorer, token: str, info: dict) -> 
         await send({"type": "ready", "info": info})
         try:
             while True:
-                msg = await ws.receive_json()
+                msg = _parse(await ws.receive_text())
+                if msg is None:  # report and keep serving; one bad frame shouldn't kill all jobs
+                    await send({"type": "error", "message": "malformed message (expected a JSON object)"})
+                    continue
                 op, job = msg.get("op"), str(msg.get("job", ""))
                 if op == "generate":
                     jobs[job] = asyncio.create_task(run_generate(job, msg))
