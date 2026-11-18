@@ -61,8 +61,9 @@ async def _expand_plain(ctx: RunContext, prompt: str) -> list[Done]:
 
 
 async def run_beam(ctx: RunContext, q: Question, n: int, m: int = 4, max_steps: int = 40,
-                   max_path_tokens: int = 8192, baseline: bool = True) -> MethodResult:
-    """baseline=False skips the extra plain sample (bench reads pass@1 from the sampling pool)."""
+                   max_path_tokens: int = 3500, baseline: bool = True) -> MethodResult:
+    """baseline=False skips the extra plain sample (bench reads pass@1 from the sampling pool).
+    max_path_tokens keeps each path (plus problem and template) inside the PRM's 4096-token context."""
     if m < 1 or n < m or n % m:
         raise ValueError(f"beam budget must be a multiple of the beam width {m} and at least {m}")
     await emit_run_start(ctx, q, "beam", n)

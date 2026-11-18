@@ -40,3 +40,10 @@ async def test_beam_caps_path_tokens(ctx, events):
     res = await run_beam(ctx, QS[0], 4, m=4, max_path_tokens=20)
     steps = [e for e in events if e["type"] == "beam_step"]
     assert len(steps) < 10 and res.samples
+
+
+def test_beam_paths_fit_the_prm_context():
+    # Qwen2.5-Math-PRM-7B has max_position_embeddings=4096; the path plus problem and chat
+    # template must stay inside it, so the per-path cap leaves headroom.
+    import inspect
+    assert inspect.signature(run_beam).parameters["max_path_tokens"].default <= 3584
