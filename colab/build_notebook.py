@@ -22,9 +22,9 @@ This notebook serves **Qwen3** (policy, via vLLM) and **Qwen2.5-Math-PRM-7B** (p
 to the local *Infinite Monkey* website through a temporary Cloudflare tunnel.
 
 1. **Runtime → Change runtime type → GPU.** An **A100** or **L4** is recommended; a T4 works but is slow.
-2. **Runtime → Run all.** On a fresh runtime the install cell installs vLLM and then **restarts the
-   session on purpose** (vLLM replaces Colab's PyTorch). When it reconnects, **Run all again**: the install
-   is skipped and the rest runs (first model download ~20 GB, 5–15 min).
+2. **Runtime → Run all.** The install cell installs vLLM (a few minutes, output shown in the cell) and
+   the rest continues straight on; the first model download is ~20 GB (5–15 min). If the install cell asks
+   you to restart (only when this session had already loaded PyTorch), restart and **Run all** again.
 3. Copy the **URL** and **TOKEN** printed at the end into the website's backend dialog
    (click the backend pill in the top-right corner).
 
@@ -43,25 +43,40 @@ GATEWAY_PORT = 9000
 MAX_MODEL_LEN = 12288                     # room for revision prompts with 4 previous attempts
 """
 
-INSTALL = f"""# vLLM pinned to the version this notebook was written against.
-import importlib.metadata, os, subprocess, sys
+INSTALL = """# vLLM pinned to the version this notebook was written against.
+import importlib.metadata, subprocess, sys
 
-VLLM_VERSION = "{VLLM_VERSION}"
-try:
-    installed = importlib.metadata.version("vllm")
-except importlib.metadata.PackageNotFoundError:
-    installed = None
+VLLM_VERSION = "@VLLM_VERSION@"
+# Packages vLLM may replace. If one of them is already loaded in this session, that copy is stale.
+WATCHED = {"torch": "torch", "transformers": "transformers", "numpy": "numpy", "triton": "triton"}
 
-if installed == VLLM_VERSION:
-    print(f"vLLM {{installed}} is already installed - continuing.")
+
+def installed_version(dist):
+    try:
+        return importlib.metadata.version(dist).split("+")[0]
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+if installed_version("vllm") == VLLM_VERSION:
+    print(f"vLLM {VLLM_VERSION} is already installed - continuing.")
 else:
-    subprocess.run([sys.executable, "-m", "pip", "install", "-q", f"vllm=={{VLLM_VERSION}}",
-                    "bitsandbytes", "fastapi", "uvicorn", "httpx"], check=True)
-    # vLLM replaces Colab's PyTorch; the running Python still has the old one loaded, so restart it.
-    print("Installed. Restarting the session now - when it reconnects, use Runtime -> Run all again.")
-    sys.stdout.flush()
-    os.kill(os.getpid(), 9)
-"""
+    before = {dist: installed_version(dist) for dist in WATCHED.values()}
+    pip = subprocess.Popen([sys.executable, "-m", "pip", "install", f"vllm=={VLLM_VERSION}",
+                            "bitsandbytes", "fastapi", "uvicorn", "httpx"],
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    for line in pip.stdout:  # show pip's progress and errors in this cell
+        print(line, end="")
+    if pip.wait() != 0:
+        raise RuntimeError("pip install failed (its output is above).")
+    stale = [mod for mod, dist in WATCHED.items()
+             if mod in sys.modules and installed_version(dist) != before[dist]]
+    if stale:
+        raise RuntimeError(f"vLLM is installed, but this session had already loaded an older {', '.join(stale)}. "
+                           "Restart the session (Colab: Runtime -> Restart session; VS Code: Restart kernel), "
+                           "then Run all - the install will be skipped.")
+    print(f"vLLM {VLLM_VERSION} installed - continuing (nothing it replaced was loaded yet, so no restart needed).")
+""".replace("@VLLM_VERSION@", VLLM_VERSION)
 
 GPU = """if "POLICY_MODEL" not in globals():
     raise RuntimeError("Settings are missing: run the configuration cell at the top first. If the session restarted, use Runtime -> Run all.")

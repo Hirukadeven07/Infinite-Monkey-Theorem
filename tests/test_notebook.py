@@ -46,12 +46,71 @@ def _cell_with(marker):
     return next(c for c in _code_cells() if marker in c)
 
 
-def test_install_cell_skips_when_installed_and_restarts_after_installing():
-    cell = _cell_with("pip")
-    assert 'importlib.metadata.version("vllm")' in cell     # already installed -> skip
-    assert "os.kill(os.getpid()" in cell                    # fresh install -> restart so new torch loads
-    assert "Run all" in cell                                 # and tell the user what to do next
-    assert not cell.lstrip().startswith("!pip")
+class FakePip:
+    """Stands in for subprocess.Popen running pip: prints lines, returns a code, optionally
+    'upgrades' packages by flipping the fake installed versions."""
+
+    def __init__(self, versions, rc=0, after=None):
+        self.versions, self.rc, self.after, self.calls = versions, rc, after or {}, []
+
+    def __call__(self, args, **kw):
+        self.calls.append(args)
+        outer = self
+
+        class P:
+            stdout = iter(["Collecting vllm\n", "Successfully installed vllm\n"])
+
+            def wait(self):
+                outer.versions.update(outer.after)
+                return outer.rc
+        return P()
+
+
+def run_install_cell(monkeypatch, versions, rc=0, after=None, loaded=()):
+    import importlib.metadata
+    import os
+    import subprocess
+    import sys
+    pip = FakePip(versions, rc, after)
+    monkeypatch.setattr(subprocess, "Popen", pip)
+
+    def version(name):
+        if versions.get(name) is None:
+            raise importlib.metadata.PackageNotFoundError(name)
+        return versions[name]
+    monkeypatch.setattr(importlib.metadata, "version", version)
+    monkeypatch.setattr(os, "kill", lambda *a: (_ for _ in ()).throw(AssertionError("must not kill the kernel")))
+    for m in ("torch", "transformers", "numpy", "triton"):  # simulate a fresh session...
+        monkeypatch.delitem(sys.modules, m, raising=False)
+    for m in loaded:                                         # ...except what the test says is loaded
+        monkeypatch.setitem(sys.modules, m, object())
+    exec(_cell_with("pip"), {})
+    return pip
+
+
+def test_install_skipped_when_pinned_vllm_present(monkeypatch, capsys):
+    pip = run_install_cell(monkeypatch, {"vllm": "0.34.0"})
+    assert pip.calls == [] and "already installed" in capsys.readouterr().out
+
+
+def test_fresh_install_continues_without_restart(monkeypatch, capsys):
+    pip = run_install_cell(monkeypatch, {"vllm": None, "torch": "2.5.0"}, after={"vllm": "0.34.0", "torch": "2.9.0"})
+    out = capsys.readouterr().out
+    assert len(pip.calls) == 1 and "Successfully installed vllm" in out   # pip output is shown
+    assert "continuing" in out                                             # torch wasn't loaded yet
+
+
+def test_failed_pip_raises_with_message(monkeypatch):
+    import pytest
+    with pytest.raises(RuntimeError, match="pip install failed"):
+        run_install_cell(monkeypatch, {"vllm": None}, rc=1)
+
+
+def test_restart_requested_only_if_a_loaded_package_changed(monkeypatch):
+    import pytest
+    with pytest.raises(RuntimeError, match="[Rr]estart"):
+        run_install_cell(monkeypatch, {"vllm": None, "torch": "2.5.0"},
+                         after={"vllm": "0.34.0", "torch": "2.9.0"}, loaded=("torch",))
 
 
 GUARDED = {
