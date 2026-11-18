@@ -39,3 +39,8 @@ def test_tally_weighted_order():
     t = tally(["3", "5", "5"], [0.9, 0.1, 0.1], [True, False, False])
     assert [e["answer"] for e in t] == ["3", "5"]
     assert t[0]["weight"] == 0.9 and t[1]["votes"] == 2
+
+
+def test_empty_answer_never_wins():
+    assert majority(["", "", "3"]) == "3"
+    assert answer_key("  ") is None

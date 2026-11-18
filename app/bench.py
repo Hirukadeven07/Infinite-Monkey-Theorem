@@ -17,11 +17,11 @@ from app.methods.revisions import run_revisions
 from app.methods.sampling import run_sampling
 from app.metrics import ResultRow, pool_rows
 from app.prompts import PROMPT_VERSION
-from app.schema import BackendError, Question, Sampling
+from app.schema import BackendError, JobError, Question, Sampling
 from app.store import Store
 
 BEAM_WIDTH = 4
-LOCK_KEYS = ("policy_model", "prm_model", "prm_precision", "vllm_version")
+LOCK_KEYS = ("policy_model", "policy_dtype", "prm_model", "prm_precision", "vllm_version")
 
 
 class BenchConfig(BaseModel):
@@ -139,7 +139,7 @@ class BenchRunner:
         done = len(self.store.done_items(run_id))
         durs = self._durations.get(run_id) or []
         eta = (mean(durs) * (total - done) / cfg.concurrency) if durs and run["status"] == "running" else None
-        return {"status": run["status"], "done": done, "total": total,
+        return {"status": run["status"], "done": done, "total": total, "failed": self.store.failed_count(run_id),
                 "eta_seconds": round(eta) if eta is not None else None, "error": self._errors.get(run_id)}
 
     # -- internals -----------------------------------------------------------
@@ -157,7 +157,13 @@ class BenchRunner:
         async def one(q: Question, item: str, budget: int) -> None:
             async with sem:
                 t0 = time.monotonic()
-                await self._run_item(run_id, cfg, ctx, q, item, budget)
+                try:
+                    await self._run_item(run_id, cfg, ctx, q, item, budget)
+                except JobError as e:
+                    # Deterministic per-request failure (e.g. prompt too long): retrying on
+                    # resume would fail again, so record it and leave it out of the metrics.
+                    self.store.mark_done(run_id, q.id, item, budget, ctx.backend.info.get("gpu"),
+                                         {"failed": str(e)})
                 self._durations.setdefault(run_id, []).append(time.monotonic() - t0)
 
         try:

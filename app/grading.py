@@ -29,7 +29,7 @@ def extract_boxed(text: str) -> str | None:
             elif ch == "}":
                 depth -= 1
                 if depth == 0:
-                    return text[start:i].strip()
+                    return text[start:i].strip() or None
     return None
 
 
@@ -52,9 +52,11 @@ class Grader:
     """Async grading in a small process pool, with a cache and a per-task timeout."""
 
     def __init__(self, workers: int = 2, timeout: float = 10.0):
+        self._workers = workers
         self._pool = ProcessPoolExecutor(max_workers=workers)
         self._timeout = timeout
         self._cache: dict[tuple[str | None, str], bool] = {}
+        self.timeouts = 0  # checks abandoned as too slow (graded wrong)
 
     async def grade(self, pred: str | None, gold: str) -> bool:
         if pred is None:
@@ -66,10 +68,28 @@ class Grader:
         try:
             result = await asyncio.wait_for(
                 loop.run_in_executor(self._pool, is_correct, pred, gold), self._timeout)
+        except TimeoutError:
+            # The worker keeps computing after wait_for gives up; replace the pool so a few
+            # pathological answers can't block grading (and mark everything wrong) for good.
+            self.timeouts += 1
+            self._replace_pool()
+            result = False
         except Exception:
             result = False
         self._cache[key] = result
         return result
 
+    @staticmethod
+    def _kill(pool: ProcessPoolExecutor) -> None:
+        procs = list((getattr(pool, "_processes", None) or {}).values())
+        pool.shutdown(wait=False, cancel_futures=True)
+        for p in procs:
+            if p.is_alive():
+                p.terminate()
+
+    def _replace_pool(self) -> None:
+        old, self._pool = self._pool, ProcessPoolExecutor(max_workers=self._workers)
+        self._kill(old)
+
     def close(self) -> None:
-        self._pool.shutdown(wait=False, cancel_futures=True)
+        self._kill(self._pool)

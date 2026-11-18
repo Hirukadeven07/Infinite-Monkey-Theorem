@@ -20,8 +20,13 @@ def test_ws_url_normalizes(raw):  # Review Focus 4
     assert ws_url(raw) == "wss://a.trycloudflare.com/ws"
 
 
-def test_ws_url_http():
+def test_ws_url_http_local_stays_plain():
     assert ws_url("http://127.0.0.1:9000") == "ws://127.0.0.1:9000/ws"
+    assert ws_url("http://localhost:9000/") == "ws://localhost:9000/ws"
+
+
+def test_ws_url_http_remote_is_upgraded():  # never send the token in cleartext over the internet
+    assert ws_url("http://a.trycloudflare.com") == "wss://a.trycloudflare.com/ws"
 
 
 class Gateway:
@@ -67,6 +72,17 @@ async def test_generate_and_score_against_live_gateway(gateway):
     assert a == [[0.5]] and b == [[0.5, 0.5]]
     await be.close()
     assert not be.connected
+
+
+async def test_gateway_job_error_raises_job_error(gateway):
+    from app.schema import JobError
+    be = ColabBackend(gateway.url, TOKEN)
+    await be.connect()
+    with pytest.raises(JobError, match="boom"):
+        async for _ in be.generate("FAIL", 1, Sampling()):
+            pass
+    assert be.connected  # one bad job does not mean the connection is gone
+    await be.close()
 
 
 async def test_bad_token(gateway):

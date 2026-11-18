@@ -116,3 +116,11 @@ async def test_vllm_policy_parses_stream_and_stop_reason():
     assert dones[0]["text"] == "Step one" and dones[0]["finished"] is False  # hit the step boundary
     assert dones[1]["text"] == "Answer" and dones[1]["finished"] is True     # EOS
     assert [e["text"] for e in evs if e["type"] == "delta" and e["index"] == 0] == ["Step", " one"]
+
+
+async def test_vllm_http_error_includes_body():
+    t = httpx.MockTransport(lambda req: httpx.Response(400, text="maximum context length is 12288 tokens"))
+    pol = VllmPolicy("http://vllm", "m", transport=t)
+    with pytest.raises(RuntimeError, match="maximum context length"):
+        async for _ in pol.stream("p", 1, None, 10, 0.7, 0.8, 20):
+            pass

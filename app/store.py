@@ -94,6 +94,10 @@ class Store:
         self._exec("INSERT OR REPLACE INTO items_done VALUES (?,?,?,?,?,?)",
                    (run_id, qid, item, budget, gpu, json.dumps(detail)))
 
+    def failed_count(self, run_id: int) -> int:
+        rows = self._query("SELECT detail_json FROM items_done WHERE run_id = ?", (run_id,))
+        return sum(1 for r in rows if "failed" in json.loads(r["detail_json"] or "{}"))
+
     def done_items(self, run_id: int) -> set[tuple[str, str, int]]:
         return {(r["question_id"], r["item"], r["budget"])
                 for r in self._query("SELECT question_id, item, budget FROM items_done WHERE run_id = ?", (run_id,))}

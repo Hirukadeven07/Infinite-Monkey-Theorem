@@ -60,7 +60,8 @@ async def _expand_plain(ctx: RunContext, prompt: str) -> list[Done]:
     return out
 
 
-async def run_beam(ctx: RunContext, q: Question, n: int, m: int = 4, max_steps: int = 40) -> MethodResult:
+async def run_beam(ctx: RunContext, q: Question, n: int, m: int = 4, max_steps: int = 40,
+                   max_path_tokens: int = 8192) -> MethodResult:
     if m < 1 or n < m or n % m:
         raise ValueError(f"beam budget must be a multiple of the beam width {m} and at least {m}")
     await emit_run_start(ctx, q, "beam", n)
@@ -88,7 +89,8 @@ async def run_beam(ctx: RunContext, q: Question, n: int, m: int = 4, max_steps: 
                         id=f"s{t}-{len(children)}",
                         parent=None if parent.id == "root" else parent.id,
                         text=parent.text + d.text + ("" if d.finished else "\n\n"),
-                        complete=d.finished or extract_boxed(d.text) is not None,
+                        complete=(d.finished or extract_boxed(d.text) is not None
+                                  or parent.tokens + d.tokens >= max_path_tokens),
                         tokens=parent.tokens + d.tokens,
                     )
                     children.append(child)

@@ -74,3 +74,8 @@ class MethodResult:
 
 class BackendError(Exception):
     """The model backend failed or disconnected."""
+
+
+class JobError(Exception):
+    """One request failed on the backend (e.g. prompt too long) while the connection is fine.
+    Deterministic, so retrying the same item will fail again."""

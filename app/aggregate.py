@@ -22,7 +22,7 @@ def answer_key(ans: str | None) -> str | None:
     s = s.replace(r"^{\circ}", "").replace(r"^\circ", "")
     s = re.sub(r"\s+", "", s)
     s = s.rstrip(".")
-    return s
+    return s or None
 
 
 def _groups(answers: list[str | None], weights: list[float]) -> list[dict]:

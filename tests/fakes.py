@@ -10,6 +10,8 @@ class FakePolicy:
 
     async def stream(self, prompt, n, stop, max_tokens, temperature, top_p, top_k):
         self.calls.append({"prompt": prompt, "n": n, "stop": stop})
+        if prompt == "FAIL":
+            raise RuntimeError("boom")
         chunks = 200 if self.slow else 2
         completed = False
         try:
@@ -35,4 +37,4 @@ class FakePrm:
 
 
 INFO = {"policy_model": "fake", "prm_model": "fake-prm", "prm_precision": "bf16",
-        "gpu": "FakeGPU", "vllm_version": "0.0", "mock": False}
+        "gpu": "FakeGPU", "vllm_version": "0.0", "policy_dtype": "bfloat16", "mock": False}

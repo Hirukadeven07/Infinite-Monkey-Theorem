@@ -48,3 +48,17 @@ async def test_grader_pool():
         assert await g.grade("3", "4") is False
     finally:
         g.close()
+
+
+async def test_grader_recovers_after_a_hanging_check():
+    g = Grader(workers=1, timeout=6.0)  # long enough for a fresh worker to spawn on Windows
+    try:
+        assert await g.grade(r"10^{10^{10}}", "5") is False   # pathological: hangs for a long time
+        assert g.timeouts == 1
+        assert await g.grade("0.5", r"\frac{1}{2}") is True  # pool must have been replaced
+    finally:
+        g.close()
+
+
+def test_empty_boxed_is_no_answer():
+    assert extract_boxed(r"so \boxed{ }") is None

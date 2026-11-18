@@ -163,7 +163,8 @@ function renderMetrics(m) {
     (m.config.reference ? " · reference" : "");
   $("#progress-bar").style.width = `${p.total ? (100 * p.done / p.total) : 0}%`;
   const eta = p.eta_seconds != null ? ` · ETA ${fmtDuration(p.eta_seconds)}` : "";
-  $("#progress-text").textContent = `${p.done}/${p.total} items · ${STATUS[p.status] || p.status}${eta}`;
+  const failed = p.failed ? ` · ${p.failed} failed (left out of the metrics)` : "";
+  $("#progress-text").textContent = `${p.done}/${p.total} items · ${STATUS[p.status] || p.status}${eta}${failed}`;
   $("#run-error").textContent = p.error ? `${p.status === "paused" ? "Paused: " : ""}${p.error}` : "";
   $("#export-csv").href = `/api/bench/${selected}/export.csv`;
   $("#export-json").href = `/api/bench/${selected}/export.json`;

@@ -7,7 +7,7 @@ import uuid
 from contextlib import suppress
 from typing import AsyncIterator, Protocol, runtime_checkable
 
-from app.schema import BackendError, Delta, Done, Sampling
+from app.schema import BackendError, Delta, Done, JobError, Sampling
 
 
 @runtime_checkable
@@ -32,17 +32,18 @@ class Backend(Protocol):
 # -- Colab gateway client -------------------------------------------------------
 
 def ws_url(pasted: str) -> str:
-    """Normalize a pasted tunnel URL (https://x.trycloudflare.com[/ws][/]) to wss://x/ws."""
+    """Normalize a pasted tunnel URL (https://x.trycloudflare.com[/ws][/]) to wss://x/ws.
+    Plain ws:// is kept only for local hosts, so the token never crosses the internet unencrypted."""
     s = pasted.strip().rstrip("/")
     if s.endswith("/ws"):
         s = s[:-3].rstrip("/")
-    if s.startswith("https://"):
-        s = "wss://" + s[len("https://"):]
-    elif s.startswith("http://"):
-        s = "ws://" + s[len("http://"):]
-    elif not s.startswith(("ws://", "wss://")):
-        s = "wss://" + s
-    return s + "/ws"
+    scheme, sep, rest = s.partition("://")
+    if not sep:
+        scheme, rest = "https", s
+    host = rest.split("/")[0].rsplit(":", 1)[0].strip("[]").lower()
+    local = host in ("localhost", "127.0.0.1", "::1")
+    secure = scheme in ("https", "wss") or not local
+    return f"{'wss' if secure else 'ws'}://{rest}/ws"
 
 
 class ColabBackend:
@@ -127,7 +128,7 @@ class ColabBackend:
         if isinstance(msg, BackendError):
             raise msg
         if msg.get("type") == "error":
-            raise BackendError(msg.get("message", "gateway error"))
+            raise JobError(msg.get("message", "gateway error"))
         return msg
 
     async def generate(self, prompt: str, n: int, sampling: Sampling,
