@@ -157,11 +157,17 @@ class ColabBackend:
 
     async def score(self, problem: str, solutions: list[list[str]]) -> list[list[float]]:
         job, q = self._open()
+        answered = False
         try:
             await self._send({"op": "score", "job": job, "problem": problem, "solutions": solutions})
-            return self._check(await q.get())["scores"]
+            msg = await q.get()
+            answered = True
+            return self._check(msg)["scores"]
         finally:
             self._queues.pop(job, None)
+            if not answered and self._ws is not None:  # cancelled (e.g. Stop): free the PRM
+                with suppress(Exception):
+                    await asyncio.shield(self._send({"op": "cancel", "job": job}))
 
     async def close(self) -> None:
         ws, self._ws = self._ws, None

@@ -86,8 +86,8 @@ class Tracker:
         if count_tokens:
             self.tokens += s.tokens
         emit = self.ctx.emit
-        await emit({"type": "sample_done", "sample": s.idx, "answer": s.answer, "correct": s.correct,
-                    "prm": s.prm, "tokens": s.tokens})
+        await emit({"type": "sample_done", "sample": s.idx, "answer": s.answer, "key": answer_key(s.answer),
+                    "correct": s.correct, "prm": s.prm, "tokens": s.tokens})
         entries = self.entries()
         await emit({"type": "tally", "entries": entries})
         self.points.append({"k": len(self.samples), "correct": winner_correct(entries)})
@@ -100,6 +100,7 @@ async def emit_run_start(ctx: RunContext, q: Question, method: str, budget: int)
 
 
 async def emit_run_end(ctx: RunContext, result) -> None:
-    await ctx.emit({"type": "run_end", "final_answer": result.final_answer, "correct": result.correct,
+    await ctx.emit({"type": "run_end", "final_answer": result.final_answer,
+                    "final_key": answer_key(result.final_answer), "correct": result.correct,
                     "majority_answer": result.majority_answer, "tokens": result.tokens,
                     "seconds": result.seconds})

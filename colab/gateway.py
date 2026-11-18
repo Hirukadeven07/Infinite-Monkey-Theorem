@@ -22,11 +22,12 @@ Module-level imports are stdlib + fastapi + httpx only, so this file is testable
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import secrets
 import threading
 from contextlib import aclosing, suppress
-from typing import AsyncIterator, Protocol
+from typing import AsyncIterator, Callable, Protocol
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
@@ -40,12 +41,14 @@ class PolicyClient(Protocol):
 
 
 class PrmScorer(Protocol):
-    def score(self, problem: str, solutions: list[list[str]]) -> list[list[float]]: ...
+    def score(self, problem: str, solutions: list[list[str]],
+              should_stop: Callable[[], bool] | None = None) -> list[list[float]]: ...
 
 
 def create_app(policy: PolicyClient, prm: PrmScorer, token: str, info: dict) -> FastAPI:
     app = FastAPI(title="tts-gateway")
     prm_lock = threading.Lock()
+    prm_can_stop = "should_stop" in inspect.signature(prm.score).parameters
 
     def _check(value: str | None) -> bool:
         return value is not None and secrets.compare_digest(value.encode(), token.encode())
@@ -96,14 +99,18 @@ def create_app(policy: PolicyClient, prm: PrmScorer, token: str, info: dict) -> 
                 jobs.pop(job, None)
 
         async def run_score(job: str, msg: dict) -> None:
+            stop = threading.Event()  # set on cancel; the PRM checks it between batches
+
             def work():
                 with prm_lock:
+                    if prm_can_stop:
+                        return prm.score(msg["problem"], msg["solutions"], should_stop=stop.is_set)
                     return prm.score(msg["problem"], msg["solutions"])
             try:
                 scores = await asyncio.to_thread(work)
                 await send({"job": job, "type": "scores", "scores": scores})
             except asyncio.CancelledError:
-                pass
+                stop.set()
             except Exception as e:
                 with suppress(Exception):
                     await send({"job": job, "type": "error", "message": f"{type(e).__name__}: {e}"})
@@ -218,12 +225,16 @@ class QwenPrm:
                 {"role": "assistant", "content": "<extra_0>".join(steps) + "<extra_0>"}]
         return self.tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=False)
 
-    def score(self, problem: str, solutions: list[list[str]]) -> list[list[float]]:
+    def score(self, problem: str, solutions: list[list[str]],
+              should_stop: Callable[[], bool] | None = None) -> list[list[float]]:
         """Score solutions in right-padded batches; each step's score is P(correct) at its
-        <extra_0> marker (causal attention means padding on the right changes nothing)."""
+        <extra_0> marker (causal attention means padding on the right changes nothing).
+        Stops between batches once should_stop() is true (the job was cancelled)."""
         torch = self.torch
         out: list[list[float]] = []
         for start in range(0, len(solutions), self.batch_size):
+            if should_stop and should_stop():
+                break
             chunk = solutions[start:start + self.batch_size]
             enc = self.tok([self._text(problem, s) for s in chunk], return_tensors="pt", padding=True)
             ids = enc.input_ids.to(self.model.device)
