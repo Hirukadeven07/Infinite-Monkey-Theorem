@@ -22,9 +22,14 @@ This notebook serves **Qwen3** (policy, via vLLM) and **Qwen2.5-Math-PRM-7B** (p
 to the local *Infinite Monkey* website through a temporary Cloudflare tunnel.
 
 1. **Runtime → Change runtime type → GPU.** An **A100** or **L4** is recommended; a T4 works but is slow.
-2. **Runtime → Run all.** The first run installs vLLM and downloads ~20 GB of weights (5–15 min).
+2. **Runtime → Run all.** On a fresh runtime the install cell installs vLLM and then **restarts the
+   session on purpose** (vLLM replaces Colab's PyTorch). When it reconnects, **Run all again**: the install
+   is skipped and the rest runs (first model download ~20 GB, 5–15 min).
 3. Copy the **URL** and **TOKEN** printed at the end into the website's backend dialog
    (click the backend pill in the top-right corner).
+
+If the session ever restarts, use **Run all** rather than running a single cell: each cell needs the
+ones above it, and will tell you which one to run if they haven't.
 
 Keep this tab open while you use the site. The URL changes every session; benchmark runs can be
 resumed after reconnecting. Anyone with both the URL *and* the token can use this GPU, so don't share them.
@@ -39,10 +44,28 @@ MAX_MODEL_LEN = 12288                     # room for revision prompts with 4 pre
 """
 
 INSTALL = f"""# vLLM pinned to the version this notebook was written against.
-!pip install -q vllm=={VLLM_VERSION} bitsandbytes fastapi uvicorn httpx
+import importlib.metadata, os, subprocess, sys
+
+VLLM_VERSION = "{VLLM_VERSION}"
+try:
+    installed = importlib.metadata.version("vllm")
+except importlib.metadata.PackageNotFoundError:
+    installed = None
+
+if installed == VLLM_VERSION:
+    print(f"vLLM {{installed}} is already installed - continuing.")
+else:
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", f"vllm=={{VLLM_VERSION}}",
+                    "bitsandbytes", "fastapi", "uvicorn", "httpx"], check=True)
+    # vLLM replaces Colab's PyTorch; the running Python still has the old one loaded, so restart it.
+    print("Installed. Restarting the session now - when it reconnects, use Runtime -> Run all again.")
+    sys.stdout.flush()
+    os.kill(os.getpid(), 9)
 """
 
-GPU = """import torch
+GPU = """if "POLICY_MODEL" not in globals():
+    raise RuntimeError("Settings are missing: run the configuration cell at the top first. If the session restarted, use Runtime -> Run all.")
+import torch
 
 assert torch.cuda.is_available(), "No GPU: Runtime -> Change runtime type -> GPU"
 props = torch.cuda.get_device_properties(0)
@@ -54,13 +77,18 @@ GPU_UTIL = 0.35 if TOTAL_GB >= 40 else (0.30 if TOTAL_GB >= 20 else 0.45)
 print(f"GPU: {GPU_NAME} ({TOTAL_GB:.0f} GB) | policy dtype {DTYPE} | vLLM share {GPU_UTIL} | PRM {PRM_QUANT}")
 """
 
-VLLM = """import subprocess, sys, time, httpx
+VLLM = """if "DTYPE" not in globals():
+    raise RuntimeError("GPU settings are missing: run section 1 (GPU check) first. If the session restarted, use Runtime -> Run all.")
+import subprocess, sys, time, httpx
 
-vllm_log = open("vllm.log", "w")
-vllm_proc = subprocess.Popen(
-    ["vllm", "serve", POLICY_MODEL, "--port", str(VLLM_PORT), "--dtype", DTYPE,
-     "--gpu-memory-utilization", str(GPU_UTIL), "--max-model-len", str(MAX_MODEL_LEN)],
-    stdout=vllm_log, stderr=subprocess.STDOUT)
+if "vllm_proc" in globals() and vllm_proc.poll() is None:
+    print("vLLM is already running - not starting a second copy.")
+else:
+    vllm_log = open("vllm.log", "w")
+    vllm_proc = subprocess.Popen(
+        ["vllm", "serve", POLICY_MODEL, "--port", str(VLLM_PORT), "--dtype", DTYPE,
+         "--gpu-memory-utilization", str(GPU_UTIL), "--max-model-len", str(MAX_MODEL_LEN)],
+        stdout=vllm_log, stderr=subprocess.STDOUT)
 
 deadline = time.time() + 900
 while time.time() < deadline:
@@ -79,7 +107,11 @@ else:
 print("vLLM is serving", POLICY_MODEL)
 """
 
-GATEWAY = """import secrets, threading, importlib.metadata
+GATEWAY = """if "vllm_proc" not in globals():
+    raise RuntimeError("vLLM is not running: run section 3 (start vLLM) first. If the session restarted, use Runtime -> Run all.")
+if vllm_proc.poll() is not None:
+    raise RuntimeError("vLLM has stopped - check vllm.log, then re-run section 3.")
+import secrets, threading, importlib.metadata
 import uvicorn
 from transformers import AutoTokenizer
 from gateway import QwenPrm, VllmPolicy, create_app
@@ -98,7 +130,9 @@ while not server.started:
 print("Gateway up:", INFO)
 """
 
-TUNNEL = """import os, re, threading, urllib.request
+TUNNEL = """if "TOKEN" not in globals():
+    raise RuntimeError("The gateway is not running: run section 4 (PRM + gateway) first. If the session restarted, use Runtime -> Run all.")
+import os, re, threading, urllib.request
 
 if not os.path.exists("cloudflared"):
     urllib.request.urlretrieve(
