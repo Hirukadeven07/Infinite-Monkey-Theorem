@@ -117,8 +117,20 @@ def _backend_view() -> dict:
     return {"kind": be.kind, "connected": connected, "info": be.info}
 
 
+async def _reconnect() -> bool:
+    """Bring a dropped Colab socket back with the saved URL and token; True if connected."""
+    be = state.backend
+    if getattr(be, "connected", True):
+        return True
+    ensure = getattr(be, "ensure_connected", None)
+    return bool(ensure and await ensure())
+
+
 @app.get("/api/backend")
 async def get_backend():
+    # A status check shouldn't hang on a dead tunnel; the reconnect keeps going in the background.
+    with suppress(asyncio.TimeoutError):
+        await asyncio.wait_for(asyncio.shield(_reconnect()), 5)
     return _backend_view()
 
 
@@ -237,21 +249,21 @@ def _require_run(run_id: int) -> dict:
     return run
 
 
-def _require_connected() -> None:
-    if not getattr(state.backend, "connected", True):
-        raise HTTPException(409, "backend is not connected")
+async def _require_connected() -> None:
+    if not await _reconnect():
+        raise HTTPException(409, "backend is not connected - is the Colab notebook still running?")
 
 
 @app.post("/api/bench")
 async def start_bench(cfg: BenchConfig):
-    _require_connected()
+    await _require_connected()
     return {"run_id": await state.bench.start(cfg, state.backend)}
 
 
 @app.post("/api/bench/{run_id}/resume")
 async def resume_bench(run_id: int):
     _require_run(run_id)
-    _require_connected()
+    await _require_connected()
     try:
         await state.bench.resume(run_id, state.backend)
     except ConfigMismatch as e:

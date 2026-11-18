@@ -60,9 +60,26 @@ class ColabBackend:
         self._reader: asyncio.Task | None = None
         self._queues: dict[str, asyncio.Queue] = {}
         self._send_lock = asyncio.Lock()
+        self._connect_lock = asyncio.Lock()
+        self._closed = False
 
     @property
     def connected(self) -> bool:
+        return self._ws is not None
+
+    async def ensure_connected(self) -> bool:
+        """Re-open a dropped socket with the saved URL and token (the tunnel can drop while Colab keeps
+        serving, e.g. after the laptop sleeps). False if it can't, or if the backend was closed on purpose."""
+        if self._ws is not None:
+            return True
+        if self._closed:
+            return False
+        async with self._connect_lock:
+            if self._ws is None and not self._closed:
+                try:
+                    await self.connect()
+                except BackendError:
+                    return False
         return self._ws is not None
 
     async def connect(self) -> dict:
@@ -108,9 +125,10 @@ class ColabBackend:
                 q.put_nowait(err)
 
     async def _send(self, msg: dict) -> None:
+        await self.ensure_connected()
         ws = self._ws
         if ws is None:
-            raise BackendError("not connected to the Colab gateway")
+            raise BackendError("not connected to the Colab gateway (is the Colab notebook still running?)")
         try:
             async with self._send_lock:
                 await ws.send(json.dumps(msg))
@@ -170,6 +188,7 @@ class ColabBackend:
                     await asyncio.shield(self._send({"op": "cancel", "job": job}))
 
     async def close(self) -> None:
+        self._closed = True
         ws, self._ws = self._ws, None
         if ws is not None:
             with suppress(Exception):
