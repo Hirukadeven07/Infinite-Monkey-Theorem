@@ -150,7 +150,9 @@ class VllmPolicy:
         texts: dict[int, str] = {}
         chunks: dict[int, int] = {}
         async with self._client.stream("POST", f"{self.base_url}/v1/completions", json=body) as resp:
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                detail = (await resp.aread()).decode("utf-8", "replace")[:500]
+                raise RuntimeError(f"vLLM HTTP {resp.status_code}: {detail}")
             async for line in resp.aiter_lines():
                 if not line.startswith("data:"):
                     continue

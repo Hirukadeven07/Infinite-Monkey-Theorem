@@ -111,3 +111,16 @@ def test_ui_assets_are_revalidated(client):
     for path in ("/", "/static/app.js", "/static/styles.css"):
         r = client.get(path)
         assert r.status_code == 200 and r.headers["cache-control"] == "no-cache"
+
+
+def test_live_unexpected_error_is_reported(client, monkeypatch):
+    import app.main as main
+
+    async def boom(*a, **k):
+        raise RuntimeError("unexpected failure")
+
+    monkeypatch.setattr(main, "run_sampling", boom)
+    with client.websocket_connect("/ws/live") as ws:
+        ws.send_json({"op": "run", "question_id": QID, "method": "bon", "budget": 4})
+        types, last = collect_until(ws, "run_end")
+        assert last["type"] == "error" and "unexpected failure" in last["message"]

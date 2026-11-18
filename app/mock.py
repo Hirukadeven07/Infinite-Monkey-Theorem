@@ -35,7 +35,7 @@ class MockBackend:
         self.seed = seed
         self.delay = delay
         self.steps = steps
-        self.info = {"policy_model": "mock", "prm_model": "mock", "prm_precision": "mock",
+        self.info = {"policy_model": "mock", "policy_dtype": "mock", "prm_model": "mock", "prm_precision": "mock",
                      "gpu": "none", "vllm_version": "mock", "mock": True}
 
     # -- helpers -------------------------------------------------------------

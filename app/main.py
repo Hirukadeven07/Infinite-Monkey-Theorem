@@ -167,6 +167,8 @@ async def _live_run(msg: dict, emit) -> None:
         state.store.add_samples(run_id, q.id, method, budget, result.samples)
     except (BackendError, ValueError) as e:
         await emit({"type": "error", "message": str(e)})
+    except Exception as e:  # never leave the UI waiting on a run that died
+        await emit({"type": "error", "message": f"{type(e).__name__}: {e}"})
 
 
 @app.websocket("/ws/live")

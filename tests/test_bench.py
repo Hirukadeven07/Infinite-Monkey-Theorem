@@ -108,3 +108,39 @@ async def test_stop_marks_run_stopped_and_resumable(runner, store):
     await runner.resume(rid, MockBackend(QS))
     await runner.wait(rid)
     assert store.get_run(rid)["status"] == "done" and len(store.done_items(rid)) == TOTAL
+
+
+async def test_resume_refuses_policy_dtype_change(runner):
+    rid = await runner.start(CFG, MockBackend(QS))
+    await runner.wait(rid)
+    other = MockBackend(QS)
+    other.info = {**other.info, "policy_dtype": "half"}
+    with pytest.raises(ConfigMismatch) as e:
+        await runner.resume(rid, other)
+    assert e.value.keys == ["policy_dtype"]
+
+
+class JobFailBackend(MockBackend):
+    """Fails deterministically (like a vLLM context-length 400) for one question only."""
+
+    def __init__(self, bad_problem):
+        super().__init__(QS)
+        self.bad = bad_problem
+
+    async def generate(self, prompt, n, sampling, stop=None):
+        from app.schema import JobError
+        if self.bad in prompt:
+            raise JobError("context length exceeded")
+        async for ev in super().generate(prompt, n, sampling, stop):
+            yield ev
+
+
+async def test_job_error_fails_item_but_run_completes(runner, store):
+    from app.data import stratified_subset
+    bad = stratified_subset(QS, 1, 0)[0]
+    rid = await runner.start(CFG, JobFailBackend(bad.problem))
+    await runner.wait(rid)
+    p = runner.progress(rid)
+    assert store.get_run(rid)["status"] == "done"
+    assert p["failed"] == 3 and p["done"] == TOTAL
+    assert not [r for r in store.rows(rid) if r.question_id == bad.id]

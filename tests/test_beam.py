@@ -33,3 +33,10 @@ async def test_beam_respects_max_steps(ctx, events):
     res = await run_beam(ctx, QS[0], 4, m=4, max_steps=3)
     assert len([e for e in events if e["type"] == "beam_step"]) == 3
     assert res.samples  # falls back to the active beams
+
+
+async def test_beam_caps_path_tokens(ctx, events):
+    ctx.backend = MockBackend(QS, steps=50)
+    res = await run_beam(ctx, QS[0], 4, m=4, max_path_tokens=20)
+    steps = [e for e in events if e["type"] == "beam_step"]
+    assert len(steps) < 10 and res.samples

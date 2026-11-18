@@ -87,7 +87,7 @@ from gateway import QwenPrm, VllmPolicy, create_app
 prm = QwenPrm(PRM_MODEL, PRM_QUANT)
 policy = VllmPolicy(f"http://127.0.0.1:{VLLM_PORT}", POLICY_MODEL, tokenizer=AutoTokenizer.from_pretrained(POLICY_MODEL))
 TOKEN = secrets.token_urlsafe(24)
-INFO = {"policy_model": POLICY_MODEL, "prm_model": PRM_MODEL, "prm_precision": PRM_QUANT,
+INFO = {"policy_model": POLICY_MODEL, "policy_dtype": DTYPE, "prm_model": PRM_MODEL, "prm_precision": PRM_QUANT,
         "gpu": GPU_NAME, "vllm_version": importlib.metadata.version("vllm"), "mock": False}
 
 server = uvicorn.Server(uvicorn.Config(create_app(policy, prm, TOKEN, INFO), host="127.0.0.1",
