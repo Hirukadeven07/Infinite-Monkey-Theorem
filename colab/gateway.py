@@ -196,6 +196,77 @@ class VllmPolicy:
                                "finished": not hit_stop}
 
 
+class _PrmModel:
+    """Qwen2 backbone + the PRM's 2-way scoring head: logits = score(last_hidden_state)."""
+
+    def __init__(self, backbone, head):
+        self.backbone, self.head = backbone, head
+        self.device = next(backbone.parameters()).device
+
+    def __call__(self, input_ids, attention_mask=None):
+        hidden = self.backbone(input_ids=input_ids, attention_mask=attention_mask, use_cache=False).last_hidden_state
+        weight = self.head[0].weight
+        if weight.device != hidden.device:
+            self.head.to(hidden.device)
+        return (self.head(hidden.to(weight.dtype)),)
+
+
+def _checkpoint_file(model_name: str, filename: str) -> str:
+    import os
+
+    if os.path.isdir(model_name):
+        path = os.path.join(model_name, filename)
+        if not os.path.exists(path):
+            raise FileNotFoundError(path)
+        return path
+    from huggingface_hub import hf_hub_download
+    return hf_hub_download(model_name, filename)
+
+
+def load_prm_model(model_name: str, quant: str = "bf16") -> _PrmModel:
+    """Load Qwen2.5-Math-PRM with transformers' built-in Qwen2Model plus its scoring head.
+
+    The checkpoint's own remote code was written for transformers 4.x and breaks on 5.x
+    ("'Qwen2RMConfig' object has no attribute 'pad_token_id'"), so it is never used: the
+    backbone is a standard Qwen2 model (config.json says model_type "qwen2") and the head is
+    score.0 (Linear h->h) -> ReLU -> score.2 (Linear h->2), read straight from the weights.
+    quant: "bf16" (>= 40 GB GPUs), "4bit" (smaller GPUs), "fp32" (CPU / tests).
+    """
+    import json
+
+    import torch
+    from safetensors import safe_open
+    from transformers import Qwen2Config, Qwen2Model
+
+    dtype = {"bf16": torch.bfloat16, "4bit": torch.float16, "fp32": torch.float32}[quant]
+    config = Qwen2Config.from_pretrained(model_name)
+    kwargs = {"config": config, "dtype": dtype}
+    if torch.cuda.is_available():
+        kwargs["device_map"] = "auto"
+    if quant == "4bit":
+        from transformers import BitsAndBytesConfig
+        kwargs["quantization_config"] = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
+    backbone = Qwen2Model.from_pretrained(model_name, **kwargs).eval()
+
+    try:
+        weight_map = json.load(open(_checkpoint_file(model_name, "model.safetensors.index.json")))["weight_map"]
+        files = sorted({f for k, f in weight_map.items() if k.startswith("score.")})
+    except Exception:  # single-file checkpoint
+        files = ["model.safetensors"]
+    head_state = {}
+    for name in files:
+        with safe_open(_checkpoint_file(model_name, name), framework="pt") as f:
+            for key in f.keys():
+                if key.startswith("score."):
+                    head_state[key[len("score."):]] = f.get_tensor(key)
+    hidden = config.hidden_size
+    head = torch.nn.Sequential(torch.nn.Linear(hidden, hidden), torch.nn.ReLU(),
+                               torch.nn.Linear(hidden, head_state["2.weight"].shape[0]))
+    head.load_state_dict(head_state)
+    head = head.to(device=backbone.embed_tokens.weight.device, dtype=dtype).eval()
+    return _PrmModel(backbone, head)
+
+
 class QwenPrm:
     """Qwen2.5-Math-PRM step scoring, following the model card. Imports torch lazily."""
 
@@ -203,20 +274,15 @@ class QwenPrm:
 
     def __init__(self, model_name: str, quant: str = "bf16", batch_size: int = 8):
         import torch
-        from transformers import AutoModel, AutoTokenizer
+        from transformers import AutoTokenizer
 
         self.torch = torch
         self.batch_size = batch_size
-        self.tok = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+        self.tok = AutoTokenizer.from_pretrained(model_name)  # standard Qwen2 tokenizer, no remote code
         self.tok.padding_side = "right"
-        kwargs = {"trust_remote_code": True, "device_map": "auto"}
-        if quant == "4bit":
-            from transformers import BitsAndBytesConfig
-            kwargs["quantization_config"] = BitsAndBytesConfig(load_in_4bit=True,
-                                                               bnb_4bit_compute_dtype=torch.float16)
-        else:
-            kwargs["torch_dtype"] = torch.bfloat16
-        self.model = AutoModel.from_pretrained(model_name, **kwargs).eval()
+        if self.tok.pad_token is None:
+            self.tok.pad_token = self.tok.eos_token
+        self.model = load_prm_model(model_name, quant)
         self.sep_id = self.tok.encode("<extra_0>")[0]
 
     @classmethod
