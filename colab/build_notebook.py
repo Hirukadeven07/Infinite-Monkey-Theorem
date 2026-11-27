@@ -16,42 +16,57 @@ HERE = Path(__file__).resolve().parent
 OUT = HERE / "tts_server.ipynb"
 VLLM_VERSION = "0.34.0"  # latest release on PyPI when this was written (2026-11-17)
 
-INTRO = """# Test-time scaling server (Colab GPU)
+INTRO = r"""# Infinite Monkey: inference server
 
-This notebook serves **Qwen3** (policy, via vLLM) and **Qwen2.5-Math-PRM-7B** (process reward model)
-to the local *Infinite Monkey* website through a temporary Cloudflare tunnel.
+Hosts the models behind the Infinite Monkey web app on a Colab GPU and exposes them through a
+Cloudflare quick tunnel.
 
-1. **Runtime → Change runtime type → GPU.** An **A100** or **L4** is recommended; a T4 works but is slow.
-2. **Runtime → Run all.** The install cell installs vLLM (a few minutes, output shown in the cell) and
-   the rest continues straight on; the first model download is ~20 GB (5–15 min). If the install cell asks
-   you to restart (only when this session had already loaded PyTorch), restart and **Run all** again.
-3. Copy the **URL** and **TOKEN** printed at the end into the website's backend dialog
-   (click the backend pill in the top-right corner).
+| Component | Default | Runtime |
+|---|---|---|
+| Policy | `Qwen/Qwen3-1.7B` | vLLM @VLLM_VERSION@, OpenAI-compatible completions |
+| Process reward model | `Qwen/Qwen2.5-Math-PRM-7B` | Transformers; bf16 on 40 GB+ GPUs, 4-bit otherwise |
+| Gateway | `colab/gateway.py` | FastAPI WebSocket with token auth |
 
-If the session ever restarts, use **Run all** rather than running a single cell: each cell needs the
-ones above it, and will tell you which one to run if they haven't.
+### Usage
 
-Keep this tab open while you use the site. The URL changes every session; benchmark runs can be
-resumed after reconnecting. Anyone with both the URL *and* the token can use this GPU, so don't share them.
+1. *Runtime > Change runtime type* and pick a GPU. A100 or L4 recommended; T4 works but is slow.
+2. *Runtime > Run all.* The first run downloads about 20 GB of weights (5 to 15 minutes).
+3. Paste the printed endpoint and token into the app's backend dialog.
+
+### Notes
+
+- Each cell depends on the ones above it. After a restart, use *Run all*.
+- If the install cell asks for a restart, restart the session and *Run all* again; the install is skipped.
+- The endpoint changes every session. Benchmark runs resume after you reconnect.
+- Anyone with both the endpoint and the token can use this GPU. Keep them private.
+""".replace("@VLLM_VERSION@", VLLM_VERSION)
+
+SETUP = r"""## Setup
+
+`Qwen/Qwen3-4B` needs an L4 or A100. `MAX_MODEL_LEN` leaves room for revision prompts that carry
+four previous attempts.
 """
 
-CONFIG = """# --- configuration --------------------------------------------------------------
-POLICY_MODEL = "Qwen/Qwen3-1.7B"        # also try "Qwen/Qwen3-0.6B"; "Qwen/Qwen3-4B" needs an A100/L4
+CONFIG = r"""# @title Configuration
+POLICY_MODEL = "Qwen/Qwen3-1.7B"  # @param ["Qwen/Qwen3-0.6B", "Qwen/Qwen3-1.7B", "Qwen/Qwen3-4B"]
 PRM_MODEL = "Qwen/Qwen2.5-Math-PRM-7B"
+MAX_MODEL_LEN = 12288
 VLLM_PORT = 8001
 GATEWAY_PORT = 9000
-MAX_MODEL_LEN = 12288                     # room for revision prompts with 4 previous attempts
 """
 
-INSTALL = """# vLLM pinned to the version this notebook was written against.
-import importlib.metadata, subprocess, sys
+INSTALL = r"""# @title Install dependencies
+import importlib.metadata
+import subprocess
+import sys
 
 VLLM_VERSION = "@VLLM_VERSION@"
-# Packages vLLM may replace. If one of them is already loaded in this session, that copy is stale.
-WATCHED = {"torch": "torch", "transformers": "transformers", "numpy": "numpy", "triton": "triton"}
+EXTRA_PACKAGES = ["bitsandbytes", "fastapi", "uvicorn", "httpx"]
+# vLLM may upgrade these. A copy already imported by this kernel would then be stale.
+SHARED_PACKAGES = ("torch", "transformers", "numpy", "triton")
 
 
-def installed_version(dist):
+def installed_version(dist: str) -> str | None:
     try:
         return importlib.metadata.version(dist).split("+")[0]
     except importlib.metadata.PackageNotFoundError:
@@ -59,150 +74,263 @@ def installed_version(dist):
 
 
 if installed_version("vllm") == VLLM_VERSION:
-    print(f"vLLM {VLLM_VERSION} is already installed - continuing.")
+    print(f"vllm=={VLLM_VERSION} already installed, continuing.")
 else:
-    before = {dist: installed_version(dist) for dist in WATCHED.values()}
-    pip = subprocess.Popen([sys.executable, "-m", "pip", "install", f"vllm=={VLLM_VERSION}",
-                            "bitsandbytes", "fastapi", "uvicorn", "httpx"],
-                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    for line in pip.stdout:  # show pip's progress and errors in this cell
+    before = {pkg: installed_version(pkg) for pkg in SHARED_PACKAGES}
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "pip", "install", f"vllm=={VLLM_VERSION}", *EXTRA_PACKAGES],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    for line in proc.stdout:
         print(line, end="")
-    if pip.wait() != 0:
-        raise RuntimeError("pip install failed (its output is above).")
-    stale = [mod for mod, dist in WATCHED.items()
-             if mod in sys.modules and installed_version(dist) != before[dist]]
+    if proc.wait() != 0:
+        raise RuntimeError("pip install failed; see the output above.")
+
+    stale = [pkg for pkg in SHARED_PACKAGES if pkg in sys.modules and installed_version(pkg) != before[pkg]]
     if stale:
-        raise RuntimeError(f"vLLM is installed, but this session had already loaded an older {', '.join(stale)}. "
-                           "Restart the session (Colab: Runtime -> Restart session; VS Code: Restart kernel), "
-                           "then Run all - the install will be skipped.")
-    print(f"vLLM {VLLM_VERSION} installed - continuing (nothing it replaced was loaded yet, so no restart needed).")
+        raise RuntimeError(
+            f"{', '.join(stale)} changed after this kernel imported it. "
+            "Restart the session, then Run all (the install will be skipped)."
+        )
+    print(f"Installed vllm=={VLLM_VERSION}, continuing.")
 """.replace("@VLLM_VERSION@", VLLM_VERSION)
 
-GPU = """if "POLICY_MODEL" not in globals():
-    raise RuntimeError("Settings are missing: run the configuration cell at the top first. If the session restarted, use Runtime -> Run all.")
-import torch
+HARDWARE = r"""## Hardware
 
-assert torch.cuda.is_available(), "No GPU: Runtime -> Change runtime type -> GPU"
-props = torch.cuda.get_device_properties(0)
-GPU_NAME = props.name
-TOTAL_GB = props.total_memory / 1024**3
-DTYPE = "half" if torch.cuda.get_device_capability(0) < (8, 0) else "bfloat16"   # T4 has no bf16
-PRM_QUANT = "bf16" if TOTAL_GB >= 40 else "4bit"
-GPU_UTIL = 0.35 if TOTAL_GB >= 40 else (0.30 if TOTAL_GB >= 20 else 0.45)
-print(f"GPU: {GPU_NAME} ({TOTAL_GB:.0f} GB) | policy dtype {DTYPE} | vLLM share {GPU_UTIL} | PRM {PRM_QUANT}")
+Precision and the GPU memory split between vLLM and the reward model follow from the detected GPU.
 """
 
-VLLM = """if "DTYPE" not in globals():
-    raise RuntimeError("GPU settings are missing: run section 1 (GPU check) first. If the session restarted, use Runtime -> Run all.")
-import subprocess, sys, time, httpx
+GPU = r"""# @title Detect GPU
+if "POLICY_MODEL" not in globals():
+    raise RuntimeError("Configuration not loaded. Use Runtime > Run all.")
+
+import torch
+
+if not torch.cuda.is_available():
+    raise RuntimeError("No GPU found. Select one under Runtime > Change runtime type.")
+
+props = torch.cuda.get_device_properties(0)
+GPU_NAME = props.name
+GPU_MEMORY_GB = props.total_memory / 1024**3
+
+# Pre-Ampere GPUs (T4) lack bf16.
+DTYPE = "bfloat16" if torch.cuda.get_device_capability(0) >= (8, 0) else "half"
+# Full-precision PRM only when the GPU fits it next to the policy.
+PRM_QUANT = "bf16" if GPU_MEMORY_GB >= 40 else "4bit"
+# vLLM's share of GPU memory. Small GPUs need a larger share to fit the policy's KV cache.
+GPU_UTIL = 0.35 if GPU_MEMORY_GB >= 40 else 0.30 if GPU_MEMORY_GB >= 20 else 0.45
+
+print(f"{GPU_NAME} | {GPU_MEMORY_GB:.0f} GB | policy {DTYPE} | PRM {PRM_QUANT} | vLLM memory share {GPU_UTIL:.2f}")
+"""
+
+GATEWAY_MD = r"""## Gateway
+
+Generated from `colab/gateway.py`. Edit that file and run `python colab/build_notebook.py` rather
+than changing this cell.
+"""
+
+POLICY_MD = r"""## Policy server
+
+Starts vLLM in the background, or reuses one that survived a kernel restart. Logs go to `vllm.log`.
+"""
+
+VLLM = r"""# @title Start vLLM
+if "DTYPE" not in globals():
+    raise RuntimeError("GPU settings not loaded. Use Runtime > Run all.")
+
+import subprocess
+import time
+
+import httpx
+
+VLLM_URL = f"http://127.0.0.1:{VLLM_PORT}"
+VLLM_STARTUP_TIMEOUT_S = 900
 
 
-def vllm_healthy():
+def vllm_healthy() -> bool:
     try:
-        return httpx.get(f"http://127.0.0.1:{VLLM_PORT}/health", timeout=2).status_code == 200
+        return httpx.get(f"{VLLM_URL}/health", timeout=2).status_code == 200
     except httpx.HTTPError:
         return False
 
 
+def log_tail(path: str, n_chars: int = 4000) -> str:
+    with open(path) as f:
+        return f.read()[-n_chars:]
+
+
 if vllm_healthy():
-    # Started earlier in this session, or left running by a previous kernel (a restart doesn't stop it).
-    served = httpx.get(f"http://127.0.0.1:{VLLM_PORT}/v1/models", timeout=5).json()["data"][0]["id"]
+    served = httpx.get(f"{VLLM_URL}/v1/models", timeout=5).json()["data"][0]["id"]
     if served != POLICY_MODEL:
-        raise RuntimeError(f"Port {VLLM_PORT} is already serving {served}, not {POLICY_MODEL}. "
-                           "Restart the runtime (Runtime -> Disconnect and delete runtime) and Run all.")
-    print(f"vLLM is already serving {served} on port {VLLM_PORT} - reusing it.")
+        raise RuntimeError(
+            f"Port {VLLM_PORT} is serving {served}, not {POLICY_MODEL}. "
+            "Use Runtime > Disconnect and delete runtime, then Run all."
+        )
+    print(f"Reusing the running vLLM server ({served}).")
 else:
     vllm_log = open("vllm.log", "w")
     vllm_proc = subprocess.Popen(
-        ["vllm", "serve", POLICY_MODEL, "--port", str(VLLM_PORT), "--dtype", DTYPE,
-         "--gpu-memory-utilization", str(GPU_UTIL), "--max-model-len", str(MAX_MODEL_LEN)],
-        stdout=vllm_log, stderr=subprocess.STDOUT)
-    deadline = time.time() + 900
+        [
+            "vllm", "serve", POLICY_MODEL,
+            "--port", str(VLLM_PORT),
+            "--dtype", DTYPE,
+            "--gpu-memory-utilization", str(GPU_UTIL),
+            "--max-model-len", str(MAX_MODEL_LEN),
+        ],
+        stdout=vllm_log, stderr=subprocess.STDOUT,
+    )
+    deadline = time.monotonic() + VLLM_STARTUP_TIMEOUT_S
     while not vllm_healthy():
         if vllm_proc.poll() is not None:
-            print(open("vllm.log").read()[-4000:])
-            raise RuntimeError("vLLM exited during startup (log above)")
-        if time.time() > deadline:
-            print(open("vllm.log").read()[-4000:])
-            raise RuntimeError("vLLM did not become healthy within 15 minutes")
+            print(log_tail("vllm.log"))
+            raise RuntimeError("vLLM exited during startup; see the log above.")
+        if time.monotonic() > deadline:
+            print(log_tail("vllm.log"))
+            raise RuntimeError(f"vLLM was not healthy after {VLLM_STARTUP_TIMEOUT_S} s; see the log above.")
         time.sleep(5)
-    print("vLLM is serving", POLICY_MODEL)
+    print(f"vLLM serving {POLICY_MODEL} at {VLLM_URL}.")
+
 VLLM_READY = True
 """
 
-GATEWAY = """if "VLLM_READY" not in globals():
-    raise RuntimeError("vLLM is not running: run section 3 (start vLLM) first. If the session restarted, use Runtime -> Run all.")
-import importlib, secrets, threading, importlib.metadata
+PRM_MD = r"""## Reward model and gateway
+
+Loads the PRM, then serves the authenticated gateway on `GATEWAY_PORT`. Re-running this cell
+replaces the previous gateway and issues a new token.
+"""
+
+GATEWAY = r"""# @title Load PRM and start gateway
+if "VLLM_READY" not in globals():
+    raise RuntimeError("vLLM is not running. Use Runtime > Run all.")
+
+import importlib
+import importlib.metadata
+import secrets
+import threading
+import time
+
 import uvicorn
 from transformers import AutoTokenizer
+
 import gateway
-importlib.reload(gateway)  # re-running after gateway.py was rewritten must use the new code
+
+importlib.reload(gateway)  # pick up a rewritten gateway.py on re-run
 from gateway import QwenPrm, VllmPolicy, create_app
 
-if "server" in globals() and server.started:  # re-running: stop the previous gateway first
+if "server" in globals() and server.started:
     server.should_exit = True
     time.sleep(1.5)
 
 prm = QwenPrm(PRM_MODEL, PRM_QUANT)
-policy = VllmPolicy(f"http://127.0.0.1:{VLLM_PORT}", POLICY_MODEL, tokenizer=AutoTokenizer.from_pretrained(POLICY_MODEL))
-TOKEN = secrets.token_urlsafe(24)
-INFO = {"policy_model": POLICY_MODEL, "policy_dtype": DTYPE, "prm_model": PRM_MODEL, "prm_precision": PRM_QUANT,
-        "gpu": GPU_NAME, "vllm_version": importlib.metadata.version("vllm"), "mock": False}
+policy = VllmPolicy(VLLM_URL, POLICY_MODEL, tokenizer=AutoTokenizer.from_pretrained(POLICY_MODEL))
 
-server = uvicorn.Server(uvicorn.Config(gateway.create_app(policy, prm, TOKEN, INFO), host="127.0.0.1",
-                                       port=GATEWAY_PORT, log_level="warning"))
-threading.Thread(target=server.run, daemon=True).start()
+TOKEN = secrets.token_urlsafe(24)
+INFO = {
+    "policy_model": POLICY_MODEL,
+    "policy_dtype": DTYPE,
+    "prm_model": PRM_MODEL,
+    "prm_precision": PRM_QUANT,
+    "gpu": GPU_NAME,
+    "vllm_version": importlib.metadata.version("vllm"),
+    "mock": False,
+}
+
+server = uvicorn.Server(
+    uvicorn.Config(create_app(policy, prm, TOKEN, INFO), host="127.0.0.1", port=GATEWAY_PORT, log_level="warning")
+)
+server_thread = threading.Thread(target=server.run, daemon=True)
+server_thread.start()
 while not server.started:
+    if not server_thread.is_alive():
+        raise RuntimeError(f"Gateway failed to start on port {GATEWAY_PORT}.")
     time.sleep(0.2)
-print("Gateway up:", INFO)
+
+for key, value in INFO.items():
+    print(f"{key:<14} {value}")
 """
 
-TUNNEL = """if "TOKEN" not in globals():
-    raise RuntimeError("The gateway is not running: run section 4 (PRM + gateway) first. If the session restarted, use Runtime -> Run all.")
-import os, re, threading, urllib.request
+TUNNEL_MD = r"""## Tunnel
+
+Opens a Cloudflare quick tunnel to the gateway and prints the endpoint and token for the app.
+"""
+
+TUNNEL = r"""# @title Open tunnel
+if "TOKEN" not in globals():
+    raise RuntimeError("Gateway is not running. Use Runtime > Run all.")
+
+import os
+import queue
+import re
+import subprocess
+import threading
+import time
+import urllib.request
+
+CLOUDFLARED_URL = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
+TUNNEL_TIMEOUT_S = 90
 
 if not os.path.exists("cloudflared"):
-    urllib.request.urlretrieve(
-        "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64", "cloudflared")
+    urllib.request.urlretrieve(CLOUDFLARED_URL, "cloudflared")
     os.chmod("cloudflared", 0o755)
 
-import queue
+if "tunnel" in globals() and tunnel.poll() is None:
+    tunnel.terminate()
 
-tunnel = subprocess.Popen(["./cloudflared", "tunnel", "--no-autoupdate", "--url", f"http://127.0.0.1:{GATEWAY_PORT}"],
-                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-tunnel_lines = queue.Queue()
-threading.Thread(target=lambda: [tunnel_lines.put(l) for l in tunnel.stdout], daemon=True).start()  # drains the pipe
+tunnel = subprocess.Popen(
+    ["./cloudflared", "tunnel", "--no-autoupdate", "--url", f"http://127.0.0.1:{GATEWAY_PORT}"],
+    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+)
 
-PUBLIC_URL, seen, deadline = None, [], time.time() + 90
-while PUBLIC_URL is None and time.time() < deadline and tunnel.poll() is None:
+
+def drain(stream, sink):
+    for line in stream:
+        sink.put(line)
+
+
+# cloudflared blocks if its output pipe fills, so keep reading for the life of the process.
+tunnel_output = queue.Queue()
+threading.Thread(target=drain, args=(tunnel.stdout, tunnel_output), daemon=True).start()
+
+PUBLIC_URL = None
+log_lines = []
+deadline = time.monotonic() + TUNNEL_TIMEOUT_S
+while PUBLIC_URL is None and time.monotonic() < deadline and tunnel.poll() is None:
     try:
-        line = tunnel_lines.get(timeout=1)
+        line = tunnel_output.get(timeout=1)
     except queue.Empty:
         continue
-    seen.append(line.rstrip())
-    m = re.search(r"https://[a-z0-9-]+\\.trycloudflare\\.com", line)
-    if m:
-        PUBLIC_URL = m.group(0)
-if PUBLIC_URL is None:
-    print("\\n".join(seen[-30:]))
-    raise RuntimeError("cloudflared did not print a tunnel URL within 90 s (its output is above). Re-run this cell.")
+    log_lines.append(line.rstrip())
+    if match := re.search(r"https://[a-z0-9-]+\.trycloudflare\.com", line):
+        PUBLIC_URL = match.group(0)
 
-from IPython.display import HTML, display
-display(HTML(f'''
-<div style="font:16px monospace;padding:14px;border:2px solid #2a78d6;border-radius:10px">
-<div>URL&nbsp;&nbsp;&nbsp;<b>{PUBLIC_URL}</b></div>
-<div>TOKEN&nbsp;<b>{TOKEN}</b></div>
-<div style="font-size:12px;opacity:.7;margin-top:6px">Paste both into the website's backend dialog. The tunnel may need ~30 s before it answers.</div>
-</div>'''))
+if PUBLIC_URL is None:
+    print("\n".join(log_lines[-30:]))
+    raise RuntimeError(f"cloudflared printed no tunnel URL within {TUNNEL_TIMEOUT_S} s; see the output above. Re-run this cell.")
+
+print(f"Endpoint  {PUBLIC_URL}")
+print(f"Token     {TOKEN}")
+print("\nPaste both into the app's backend dialog. The tunnel can take about 30 s to start answering.")
 """
 
-KEEPALIVE = """# Optional: keep this cell running to watch health (stop it any time; the server keeps running).
+MONITOR_MD = r"""## Monitor
+
+Optional. Reports health once a minute; interrupting this cell leaves the servers running.
+"""
+
+MONITOR = r"""# @title Monitor health
+import time
+
+import httpx
+
 while True:
+    stamp = time.strftime("%H:%M:%S")
     try:
         r = httpx.get(f"http://127.0.0.1:{GATEWAY_PORT}/health", headers={"Authorization": f"Bearer {TOKEN}"}, timeout=5)
-        print(time.strftime("%H:%M:%S"), "gateway", r.status_code, "| vLLM healthy:", vllm_healthy())
-    except Exception as e:
-        print(time.strftime("%H:%M:%S"), "health check failed:", e)
+        vllm_state = "ok" if vllm_healthy() else "down"
+        tunnel_state = "ok" if tunnel.poll() is None else "exited"
+        print(f"{stamp}  gateway {r.status_code}  vllm {vllm_state}  tunnel {tunnel_state}")
+    except httpx.HTTPError as e:
+        print(f"{stamp}  health check failed: {e}")
     time.sleep(60)
 """
 
@@ -224,19 +352,18 @@ def build() -> str:
     gateway_src = (HERE / "gateway.py").read_text(encoding="utf-8").strip()
     cells = [
         _md(INTRO),
-        _code(CONFIG),
-        _code(INSTALL),
-        _md("## 1. GPU check"), _code(GPU),
-        _md("## 2. Gateway code (generated from `colab/gateway.py` in the repo)"),
-        _code("%%writefile gateway.py\n" + gateway_src),
-        _md("## 3. Start vLLM (policy model)"), _code(VLLM),
-        _md("## 4. Load the PRM and start the gateway"), _code(GATEWAY),
-        _md("## 5. Open the tunnel and print the URL + token"), _code(TUNNEL),
-        _md("## 6. Health (optional)"), _code(KEEPALIVE),
+        _md(SETUP), _code(CONFIG), _code(INSTALL),
+        _md(HARDWARE), _code(GPU),
+        _md(GATEWAY_MD), _code("%%writefile gateway.py\n" + gateway_src),
+        _md(POLICY_MD), _code(VLLM),
+        _md(PRM_MD), _code(GATEWAY),
+        _md(TUNNEL_MD), _code(TUNNEL),
+        _md(MONITOR_MD), _code(MONITOR),
     ]
     nb = {
         "cells": cells,
-        "metadata": {"accelerator": "GPU", "colab": {"provenance": [], "gpuType": "L4"},
+        "metadata": {"accelerator": "GPU",
+                     "colab": {"name": "tts_server.ipynb", "provenance": [], "gpuType": "L4", "toc_visible": True},
                      "kernelspec": {"display_name": "Python 3", "name": "python3"},
                      "language_info": {"name": "python"}},
         "nbformat": 4, "nbformat_minor": 0,
